@@ -1,0 +1,10 @@
+node_modules
+dist
+coverage
+.turbo
+.vite
+.smithers
+.DS_Store
+
+# DEV-LOCAL owner store (contains dev secrets — never commit)
+.githaiku-dev/
