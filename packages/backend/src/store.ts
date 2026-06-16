@@ -97,6 +97,11 @@ export function createOwner(input: CreateOwnerInput): CreateOwnerResult {
   };
 }
 
+/** Plain lookup of an owner by id (not secret-sensitive — id is not a credential). */
+export function findOwnerById(ownerId: string): OwnerRecord | null {
+  return load().owners.find((o) => o.ownerId === ownerId) ?? null;
+}
+
 /**
  * Constant-time lookup of an owner by secret code.
  *

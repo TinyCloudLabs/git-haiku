@@ -29,6 +29,16 @@ export const config = {
   secretsProvider: (process.env['GITHAIKU_SECRETS_PROVIDER'] ?? 'local') as 'local' | 'tc-cli',
 
   /**
+   * Backend stable identity (tc-cli provider only). The owner delegates KV-get +
+   * decrypt to THIS key's did:pkh; the backend reads secrets under that
+   * delegation. From env/config for local dev; dstack-derived in the TEE (seam).
+   */
+  backendPrivateKey: process.env['GITHAIKU_BACKEND_PRIVATE_KEY'] ?? null,
+
+  /** TinyCloud node host for the backend identity + delegated reads. */
+  nodeHost: process.env['GITHAIKU_NODE_HOST'] ?? 'https://node.tinycloud.xyz',
+
+  /**
    * Haiku generator:
    *  - deterministic (default): template generator, NO Anthropic key needed.
    *  - anthropic: DEFERRED behind this flag. Uses the owner's Anthropic key.

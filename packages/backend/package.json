@@ -9,11 +9,14 @@
     "start": "tsx src/index.ts",
     "build": "tsc -p tsconfig.json --noEmit",
     "seed": "tsx src/seed.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:live": "tsx test/live-delegated-secrets.ts"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",
     "@githaiku/shared": "workspace:*",
+    "@tinycloud/cli": "0.7.0-beta.1",
+    "@tinycloud/node-sdk": "2.3.1-beta.0",
     "fastify": "^5.1.0"
   },
   "devDependencies": {

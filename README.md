@@ -66,7 +66,7 @@ Example denial (wrong code):
 | Concern | Preview (dev mode) | Real trust contract (deferred) |
 |---|---|---|
 | Owner secrets | Gitignored local store (`.githaiku-dev/`) | TinyCloud Secrets via web-sdk |
-| Secret reads | `SecretsProvider=local` | `tc-cli` (`@tinycloud/cli@0.7.0-beta.1`, `tc secrets get --delegation`) — `GITHAIKU_SECRETS_PROVIDER=tc-cli` (throws until wired) |
+| Secret reads | `SecretsProvider=local` | `tc-cli` (`@tinycloud/cli@0.7.0-beta.1`, real `tc secrets get --delegation`) — `GITHAIKU_SECRETS_PROVIDER=tc-cli` (**wired**; needs a node + backend key + stored delegation, else fails loudly) |
 | Haiku generation | Deterministic template (default) | Anthropic via owner key — `GITHAIKU_USE_ANTHROPIC=1` (stubbed seam) |
 | GitHub token | Optional; falls back to a labeled dev fixture | Required, from owner's stored token |
 | `proof` block | Dev placeholder (`image_digest`/`attestation_url` = `null`) | dstack TEE attestation (`/attestation` is a stub) |
@@ -81,8 +81,12 @@ degrading.
 
 - `packages/shared` — egress schema (single source of truth) + output guard.
 - `packages/backend` — Fastify API: `POST /api/owner`, `POST /api/haiku`,
-  `GET /health`, `GET /attestation` (stub). `SecretsProvider` interface,
-  commit-messages-only GitHub adapter, deterministic haiku core.
+  `GET /health`, `GET /attestation` (stub), plus (tc-cli provider only)
+  `GET /api/server-info` (backend DID + the policy owners must delegate) and
+  `POST /api/delegations` (receive + validate + store an owner delegation).
+  `SecretsProvider` interface (`local` + real `tc-cli`), backend identity
+  (`identity.ts`, stable did:pkh; dstack key is a seam), per-owner delegation
+  store, commit-messages-only GitHub adapter, deterministic haiku core.
 - `packages/frontend` — Vite + React: requester page (hero) + owner setup page;
   proxies `/api` to the backend.
 
@@ -91,7 +95,9 @@ degrading.
 | Env | Default | Effect |
 |---|---|---|
 | `PORT` | `8787` | Backend port |
-| `GITHAIKU_SECRETS_PROVIDER` | `local` | `local` or `tc-cli` (deferred) |
+| `GITHAIKU_SECRETS_PROVIDER` | `local` | `local` or `tc-cli` (real delegated reads) |
+| `GITHAIKU_BACKEND_PRIVATE_KEY` | _(none)_ | tc-cli only: backend stable identity; its did:pkh is the delegation audience |
+| `GITHAIKU_NODE_HOST` | `https://node.tinycloud.xyz` | TinyCloud node for the backend identity + delegated reads |
 | `GITHAIKU_USE_ANTHROPIC` | `false` | Use Anthropic generator (deferred) |
 | `GITHAIKU_MAX_COMMITS` | `30` | GitHub commit cap |
 | `GITHAIKU_WINDOW_DAYS` | `30` | GitHub time window |
@@ -101,4 +107,17 @@ degrading.
 ```bash
 pnpm test    # shared (guard, incl. sanitize-before-validate) + backend (egress flow)
 pnpm build   # typecheck backend + build frontend
+```
+
+### Live delegated-secrets integration (real node, gated)
+
+Proves the real tc-cli path end-to-end against a **local** tinycloud-node: a
+throwaway owner puts both secrets, delegates KV-get + decrypt to the backend's
+stable `did:pkh`, delivers the delegation (`POST /api/delegations`), and the
+backend reads both secrets via the real `tc` CLI. Not part of `pnpm test`.
+
+```bash
+GITHAIKU_LIVE=1 pnpm --filter @githaiku/backend test:live
+# optional: GITHAIKU_LIVE_GITHUB_TOKEN=<real ro token> GITHAIKU_LIVE_GITHUB_LOGIN=<login>
+#           GITHAIKU_NODE_BIN=<path to tinycloud binary> GITHAIKU_LIVE_PORT=<port>
 ```
