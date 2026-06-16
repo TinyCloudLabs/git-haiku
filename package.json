@@ -4,7 +4,8 @@
   "type": "module",
   "packageManager": "pnpm@9.12.3",
   "scripts": {
-    "dev": "concurrently -n backend,frontend -c green,cyan \"pnpm --filter @githaiku/backend dev\" \"pnpm --filter @githaiku/frontend dev\"",
+    "dev": "portless",
+    "dev:plain": "GITHAIKU_BACKEND_URL=http://127.0.0.1:8787 concurrently -n backend,frontend -c green,cyan \"pnpm --filter @githaiku/backend dev\" \"pnpm --filter @githaiku/frontend dev\"",
     "seed": "pnpm --filter @githaiku/backend seed",
     "build": "pnpm -r --if-present build",
     "lint": "pnpm -r --if-present lint",

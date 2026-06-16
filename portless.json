@@ -1,0 +1,6 @@
+{
+  "apps": {
+    "packages/frontend": { "name": "githaiku" },
+    "packages/backend": { "name": "api.githaiku" }
+  }
+}
