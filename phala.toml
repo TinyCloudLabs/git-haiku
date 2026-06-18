@@ -1,0 +1,7 @@
+name = "githaiku-backend"
+profile = "tinycloudxyz"
+compose_file = "docker-compose.phala.yml"
+gateway_domain = "api.githaiku.com"
+gateway_port = 8787
+public_logs = false
+public_sysinfo = true

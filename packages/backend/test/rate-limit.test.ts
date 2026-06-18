@@ -1,0 +1,41 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+// Isolated config BEFORE importing the server: a tiny rate limit so we can trip
+// it, and a throwaway data dir + forced deterministic generator.
+process.env.GITHAIKU_DATA_DIR = mkdtempSync(join(tmpdir(), 'githaiku-rl-test-'));
+process.env.GITHAIKU_HAIKU_GENERATOR = 'deterministic';
+process.env.GITHAIKU_HAIKU_RATE_MAX = '3';
+process.env.GITHAIKU_HAIKU_RATE_WINDOW = '1 minute';
+
+const { buildServer } = await import('../src/server');
+const { createOwner } = await import('../src/store');
+
+const app = await buildServer();
+let code: string;
+
+beforeAll(async () => {
+  await app.ready();
+  code = createOwner({ githubLogin: 'octocat' }).secretCode;
+});
+
+afterAll(async () => {
+  await app.close();
+});
+
+describe('rate limiting on /api/haiku', () => {
+  it('429s after the per-key limit is exceeded', async () => {
+    const statuses: number[] = [];
+    // 5 requests with the SAME code from the SAME (default) IP -> same key.
+    for (let i = 0; i < 5; i++) {
+      const res = await app.inject({ method: 'POST', url: '/api/haiku', payload: { code } });
+      statuses.push(res.statusCode);
+    }
+    // First 3 allowed, the rest rate-limited.
+    expect(statuses.filter((s) => s === 200)).toHaveLength(3);
+    expect(statuses.filter((s) => s === 429).length).toBeGreaterThanOrEqual(1);
+  });
+});

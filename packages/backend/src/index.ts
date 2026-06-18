@@ -2,7 +2,7 @@ import { config } from './config';
 import { buildServer } from './server';
 
 async function main(): Promise<void> {
-  const app = buildServer();
+  const app = await buildServer();
   await app.listen({ port: config.port, host: config.host });
   // eslint-disable-next-line no-console
   console.log(

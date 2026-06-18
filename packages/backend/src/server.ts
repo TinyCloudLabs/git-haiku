@@ -1,11 +1,15 @@
 import cors from '@fastify/cors';
+import rateLimit from '@fastify/rate-limit';
 import {
   type EgressPayload,
   guardOutboundPayload,
   serializeGuardedResponse,
 } from '@githaiku/shared';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 
+import { getAttestation } from './attestation';
+import { AuthError, nonceStore, verifyOwnerAuth, type OwnerAuth } from './auth';
+import { readAudit, recordAudit } from './audit';
 import { config } from './config';
 import { storeDelegation } from './delegation-store';
 import { validateDelegation } from './delegations';
@@ -13,45 +17,63 @@ import { fetchRecentCommits } from './github';
 import { makeHaikuGenerator } from './haiku';
 import { getBackendIdentity } from './identity';
 import { backendPolicy, ownerDidFromAddress } from './policy';
-import { devProof } from './proof';
+import { buildProof } from './proof';
+import { HAIKU_RATE_MAX, HAIKU_RATE_WINDOW, haikuRateKey } from './rate-limit';
 import { makeSecretsProvider } from './secrets';
-import { createOwner, findOwnerById, findOwnerByCode } from './store';
+import {
+  createCode,
+  createOwner,
+  findOwnerByAddress,
+  findOwnerById,
+  findOwnerByCode,
+  listCodes,
+  revokeCode,
+  rotateCodes,
+  type OwnerRecord,
+} from './store';
 
 /**
  * The haiku endpoint is the egress choke point. EVERY response on /api/haiku is
  * built into an EgressPayload and sent through the output guard
  * (sanitize -> validate -> serialize). Denials and errors carry no commit data.
+ *
+ * Owner-scoped endpoints (/api/owner, /api/delegations, /api/codes/*,
+ * /api/audit) are OWNER-AUTHENTICATED via a SIWE-style signature (see auth.ts).
+ * Public: /health, /attestation, /api/server-info, /api/auth/nonce, /api/haiku.
  */
-export function buildServer(): FastifyInstance {
+export async function buildServer(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
   const secrets = makeSecretsProvider();
 
-  app.register(cors, { origin: true });
+  await app.register(cors, { origin: true });
+
+  // Rate limiter (global registration; applied per-route via config). Brute-force
+  // protection for /api/haiku, keyed by IP + code-hash.
+  await app.register(rateLimit, { global: false });
 
   // --- Health (operational, not part of the haiku egress contract) --------
   app.get('/health', async () => ({
     ok: true,
     service: 'githaiku-backend',
-    mode: 'dev',
+    mode: config.secretsProvider === 'tc-cli' ? 'tc-cli' : 'dev',
     secretsProvider: secrets.kind,
     haikuGenerator: config.haikuGenerator,
   }));
 
-  // --- Attestation stub (DEFERRED: real dstack quote/event_log/compose_hash)
-  app.get('/attestation', async () => ({
-    deferred: true,
-    note: 'dstack TEE attestation is deferred for the preview. proof.image_digest / proof.attestation_url are null.',
-    quote: null,
-    event_log: null,
-    compose_hash: null,
-    app_id: null,
-  }));
+  // --- Attestation: real dstack TDX quote in-TEE, dev stub otherwise -------
+  app.get('/attestation', async (_request, reply) => {
+    try {
+      return await getAttestation();
+    } catch (err) {
+      reply.code(503);
+      return { error: 'attestation_unavailable', message: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+  // --- Auth nonce (public): owner GETs a one-time nonce to sign ------------
+  app.get('/api/auth/nonce', async () => ({ nonce: nonceStore.issue() }));
 
   // --- Server info (no auth): backend DID + the policy owners must delegate -
-  // Advertises the per-secret KV-get entry for GITHUB_TOKEN (the owner's only
-  // delegated secret) plus the decrypt entry. The RedPill LLM key is backend
-  // config, NOT an owner secret, so it is not part of the delegation. Only
-  // meaningful under the tc-cli provider; under local there is no backend node.
   app.get('/api/server-info', async (_request, reply) => {
     if (secrets.kind !== 'tc-cli') {
       reply.code(404);
@@ -65,38 +87,71 @@ export function buildServer(): FastifyInstance {
     };
   });
 
-  // --- Receive an owner's delegation (no auth in dev) ----------------------
-  // The owner POSTs { ownerId, ownerAddress, serialized }. We validate the
-  // delegation covers the policy and persist it per-owner. tc-cli only.
+  // --- Owner setup (OWNER-AUTHENTICATED) ----------------------------------
+  // The owner signs the auth message; we bind the created owner to their
+  // recovered address. In prod the owner stores secrets in TinyCloud Secrets via
+  // the web-sdk; the dev store persists githubToken to the gitignored file.
+  app.post('/api/owner', async (request, reply) => {
+    const auth = await authenticate(request, reply);
+    if (!auth) return;
+
+    const body = (request.body ?? {}) as { githubLogin?: unknown; githubToken?: unknown };
+    const githubLogin = typeof body.githubLogin === 'string' ? body.githubLogin.trim() : '';
+    if (!githubLogin) {
+      reply.code(400);
+      return { error: 'githubLogin is required' };
+    }
+
+    // One address = one owner. A returning owner manages their existing record
+    // via the code/secret endpoints rather than creating a duplicate.
+    if (findOwnerByAddress(auth.address)) {
+      reply.code(409);
+      return { error: 'owner_exists', message: 'an owner already exists for this address' };
+    }
+
+    const result = createOwner({
+      githubLogin,
+      githubToken: typeof body.githubToken === 'string' && body.githubToken ? body.githubToken : null,
+      ownerAddress: auth.address,
+    });
+    reply.code(201);
+    return result;
+  });
+
+  // --- Receive an owner's delegation (OWNER-AUTHENTICATED) -----------------
   app.post('/api/delegations', async (request, reply) => {
     if (secrets.kind !== 'tc-cli') {
       reply.code(404);
       return { error: 'delegations are only accepted under the tc-cli secrets provider' };
     }
-    const body = (request.body ?? {}) as {
-      ownerId?: unknown;
-      ownerAddress?: unknown;
-      serialized?: unknown;
-    };
+    const auth = await authenticate(request, reply);
+    if (!auth) return;
+
+    const body = (request.body ?? {}) as { ownerId?: unknown; serialized?: unknown };
     const ownerId = typeof body.ownerId === 'string' ? body.ownerId : '';
-    const ownerAddress = typeof body.ownerAddress === 'string' ? body.ownerAddress : '';
     const serialized = typeof body.serialized === 'string' ? body.serialized : '';
 
-    if (!ownerId || !ownerAddress || !serialized) {
+    if (!ownerId || !serialized) {
       reply.code(400);
-      return { error: 'ownerId, ownerAddress and serialized are required' };
+      return { error: 'ownerId and serialized are required' };
     }
-    if (!findOwnerById(ownerId)) {
+    const owner = findOwnerById(ownerId);
+    if (!owner) {
       reply.code(404);
       return { error: 'unknown ownerId' };
+    }
+    // The authenticated owner must own this record.
+    if (!owner.ownerAddress || owner.ownerAddress !== auth.address.toLowerCase()) {
+      reply.code(403);
+      return { error: 'forbidden', message: 'authenticated address does not own this record' };
     }
 
     try {
       const validated = validateDelegation(serialized);
-      storeDelegation({
+      await storeDelegation({
         ownerId,
         serialized,
-        ownerDid: ownerDidFromAddress(ownerAddress),
+        ownerDid: ownerDidFromAddress(auth.address),
         grantedAt: new Date().toISOString(),
         expiresAt: validated.expiresAt,
       });
@@ -108,82 +163,151 @@ export function buildServer(): FastifyInstance {
     }
   });
 
-  // --- Owner setup (dev-local store) --------------------------------------
-  // DEV-ONLY: in prod the owner signs in with OpenKey and stores secrets in
-  // TinyCloud Secrets via the web-sdk. That is deferred; here we persist to the
-  // gitignored dev store and mint a secret code.
-  app.post('/api/owner', async (request, reply) => {
-    const body = (request.body ?? {}) as {
-      githubLogin?: unknown;
-      githubToken?: unknown;
-    };
+  // --- Code management (OWNER-AUTHENTICATED) -------------------------------
+  app.get('/api/codes', async (request, reply) => {
+    const ctx = await authenticateOwner(request, reply);
+    if (!ctx) return;
+    return { codes: listCodes(ctx.owner.ownerId) };
+  });
 
-    const githubLogin = typeof body.githubLogin === 'string' ? body.githubLogin.trim() : '';
-    if (!githubLogin) {
-      reply.code(400);
-      return { error: 'githubLogin is required' };
-    }
-
-    const result = createOwner({
-      githubLogin,
-      githubToken: typeof body.githubToken === 'string' && body.githubToken ? body.githubToken : null,
-    });
-
+  app.post('/api/codes', async (request, reply) => {
+    const ctx = await authenticateOwner(request, reply);
+    if (!ctx) return;
     reply.code(201);
-    return result;
+    return createCode(ctx.owner.ownerId);
+  });
+
+  app.post('/api/codes/rotate', async (request, reply) => {
+    const ctx = await authenticateOwner(request, reply);
+    if (!ctx) return;
+    return rotateCodes(ctx.owner.ownerId);
+  });
+
+  app.post('/api/codes/revoke', async (request, reply) => {
+    const ctx = await authenticateOwner(request, reply);
+    if (!ctx) return;
+    const body = (request.body ?? {}) as { codeId?: unknown };
+    const codeId = typeof body.codeId === 'string' ? body.codeId : '';
+    if (!codeId) {
+      reply.code(400);
+      return { error: 'codeId is required' };
+    }
+    try {
+      return revokeCode(ctx.owner.ownerId, codeId);
+    } catch {
+      reply.code(404);
+      return { error: 'unknown codeId' };
+    }
+  });
+
+  // --- Audit trail (OWNER-AUTHENTICATED) ----------------------------------
+  app.get('/api/audit', async (request, reply) => {
+    const ctx = await authenticateOwner(request, reply);
+    if (!ctx) return;
+    return { entries: await readAudit(ctx.owner.ownerId) };
   });
 
   // --- Requester: code -> haiku (THE egress choke point) -------------------
-  app.post('/api/haiku', async (request, reply) => {
-    reply.header('content-type', 'application/json');
+  app.post(
+    '/api/haiku',
+    {
+      config: {
+        rateLimit: {
+          max: HAIKU_RATE_MAX,
+          timeWindow: HAIKU_RATE_WINDOW,
+          keyGenerator: haikuRateKey,
+        },
+      },
+    },
+    async (request, reply) => {
+      reply.header('content-type', 'application/json');
 
-    const body = (request.body ?? {}) as { code?: unknown };
-    const code = typeof body.code === 'string' ? body.code.trim() : '';
+      const body = (request.body ?? {}) as { code?: unknown };
+      const code = typeof body.code === 'string' ? body.code.trim() : '';
 
-    // 1. Validate the secret code (constant-time lookup).
-    const owner = code ? findOwnerByCode(code) : null;
-    if (!owner) {
-      // Clean denial. No commit data. Guarded shape.
-      const denial: EgressPayload = { allowed: false, reason: 'invalid code' };
-      return reply.send(serializeGuardedResponse(denial));
-    }
-
-    try {
-      // 2. Resolve the owner's secrets (dev-local; tc-cli deferred).
-      const ownerSecrets = await secrets.getOwnerSecrets(owner);
-
-      // 3. Fetch bounded commit metadata (messages/repos/timestamps only).
-      const { commits } = await fetchRecentCommits({
-        githubLogin: owner.githubLogin,
-        githubToken: ownerSecrets.githubToken,
-      });
-
-      if (commits.length === 0) {
-        const denial: EgressPayload = { allowed: false, reason: 'no recent activity' };
+      // 1. Validate the secret code (constant-time lookup).
+      const owner = code ? findOwnerByCode(code) : null;
+      if (!owner) {
+        await recordAudit({ code, ownerId: null, decision: 'deny', reason: 'invalid_code' });
+        const denial: EgressPayload = { allowed: false, reason: 'invalid code' };
         return reply.send(serializeGuardedResponse(denial));
       }
 
-      // 4. Generate the haiku (RedPill when REDPILL_API_KEY is set; the
-      //    deterministic template is the no-key fallback). Backend-global key —
-      //    NOT a per-owner secret.
-      const generator = makeHaikuGenerator();
-      const lines = await generator.generate(commits);
+      try {
+        // 2. Resolve the owner's secrets (dev-local or tc-cli delegated).
+        const ownerSecrets = await secrets.getOwnerSecrets(owner);
 
-      // 5. Build the guarded success shape. guardOutboundPayload sanitizes the
-      //    snapshot (only haiku.lines + proof survive) then validates it.
-      const success: EgressPayload = {
-        allowed: true,
-        haiku: { lines },
-        proof: devProof(),
-      };
-      const guarded = guardOutboundPayload(success);
-      return reply.send(JSON.stringify(guarded));
-    } catch (err) {
-      // Operational failure. Redacted to a denial carrying no commit data.
-      reply.code(200);
-      return reply.send(serializeGuardedResponse(err));
-    }
-  });
+        // 3. Fetch bounded commit metadata (messages/repos/timestamps only).
+        const { commits } = await fetchRecentCommits({
+          githubLogin: owner.githubLogin,
+          githubToken: ownerSecrets.githubToken,
+        });
+
+        if (commits.length === 0) {
+          await recordAudit({ code, ownerId: owner.ownerId, decision: 'deny', reason: 'no_recent_activity' });
+          const denial: EgressPayload = { allowed: false, reason: 'no recent activity' };
+          return reply.send(serializeGuardedResponse(denial));
+        }
+
+        // 4. Generate the haiku (RedPill when keyed; deterministic fallback).
+        const generator = makeHaikuGenerator();
+        const lines = await generator.generate(commits);
+
+        // 5. Build the guarded success shape with real (in-TEE) provenance.
+        const success: EgressPayload = {
+          allowed: true,
+          haiku: { lines },
+          proof: await buildProof(),
+        };
+        const guarded = guardOutboundPayload(success);
+        await recordAudit({ code, ownerId: owner.ownerId, decision: 'allow', reason: 'ok' });
+        return reply.send(JSON.stringify(guarded));
+      } catch (err) {
+        // Operational failure. Redacted to a denial carrying no commit data.
+        await recordAudit({ code, ownerId: owner.ownerId, decision: 'deny', reason: 'error' });
+        reply.code(200);
+        return reply.send(serializeGuardedResponse(err));
+      }
+    },
+  );
 
   return app;
+}
+
+// ── auth helpers ─────────────────────────────────────────────────────
+
+/**
+ * Verify the owner-auth payload on a request; replies 401 + returns null on
+ * failure. Auth is carried in headers (works uniformly for GET + POST):
+ *   x-githaiku-address, x-githaiku-nonce, x-githaiku-signature.
+ */
+async function authenticate(request: FastifyRequest, reply: FastifyReply): Promise<OwnerAuth | null> {
+  const h = request.headers;
+  try {
+    return await verifyOwnerAuth({
+      address: h['x-githaiku-address'],
+      nonce: h['x-githaiku-nonce'],
+      signature: h['x-githaiku-signature'],
+    });
+  } catch (err) {
+    reply.code(401);
+    reply.send({ error: 'unauthenticated', message: err instanceof AuthError ? err.message : 'authentication failed' });
+    return null;
+  }
+}
+
+/** Authenticate AND resolve the owner record bound to that address. */
+async function authenticateOwner(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<{ auth: OwnerAuth; owner: OwnerRecord } | null> {
+  const auth = await authenticate(request, reply);
+  if (!auth) return null;
+  const owner = findOwnerByAddress(auth.address);
+  if (!owner) {
+    reply.code(404);
+    reply.send({ error: 'no_owner', message: 'no owner record for the authenticated address' });
+    return null;
+  }
+  return { auth, owner };
 }

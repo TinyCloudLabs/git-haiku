@@ -49,6 +49,13 @@ export const config = {
   nodeHost: process.env['GITHAIKU_NODE_HOST'] ?? 'https://node.tinycloud.xyz',
 
   /**
+   * The backend's public base URL (e.g. https://api.githaiku.com). Used to bind
+   * the haiku proof's `attestation_url` to this app's `/attestation` endpoint.
+   * Only set in a real deployment; null in dev (placeholder proof).
+   */
+  publicUrl: process.env['GITHAIKU_PUBLIC_URL'] ?? null,
+
+  /**
    * Haiku generator selection:
    *  - 'redpill': RedPill confidential-LLM-backed generator (the real path).
    *    Default whenever REDPILL_API_KEY is set.

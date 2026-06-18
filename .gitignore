@@ -8,3 +8,8 @@ coverage
 
 # DEV-LOCAL owner store (contains dev secrets — never commit)
 .githaiku-dev/
+
+# Deploy env files (encrypted at deploy time via `phala deploy -e`) — never commit
+.env
+.env.*
+!.env.example

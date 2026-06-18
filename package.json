@@ -9,7 +9,10 @@
     "seed": "pnpm --filter @githaiku/backend seed",
     "build": "pnpm -r --if-present build",
     "lint": "pnpm -r --if-present lint",
-    "test": "pnpm -r --if-present test"
+    "test": "pnpm -r --if-present test",
+    "docker:build": "docker buildx build --platform linux/amd64 -t ${GITHAIKU_BACKEND_IMAGE:-ghcr.io/tinycloudlabs/githaiku-backend:latest} .",
+    "docker:push": "docker push ${GITHAIKU_BACKEND_IMAGE:-ghcr.io/tinycloudlabs/githaiku-backend:latest}",
+    "deploy:phala": "phala deploy -c docker-compose.phala.yml -e .env.prod --wait"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

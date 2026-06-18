@@ -1,4 +1,4 @@
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
@@ -9,12 +9,27 @@ import { config } from './config';
  *
  * This is intentional, labeled dev behavior — NOT the real trust contract. In
  * production an owner's GitHub token lives in TinyCloud Secrets and is read by
- * the TEE under a delegation (deferred behind GITHAIKU_SECRETS_PROVIDER=tc-cli).
- * For the local preview we persist it to a gitignored JSON file so the flow
- * works end-to-end with no infra.
+ * the TEE under a delegation (GITHAIKU_SECRETS_PROVIDER=tc-cli). For the local
+ * preview we persist it to a gitignored JSON file so the flow works end-to-end
+ * with no infra.
+ *
+ * SECRET CODES: an owner can hold MULTIPLE codes (create / revoke / rotate).
+ * Only a sha256 HASH of each code is stored — the plaintext is shown ONCE at
+ * creation/rotation and never persisted. Validation hashes the submitted code
+ * and compares it constant-time against every active hash.
  *
  * The file is written under config.dataDir which is in .gitignore.
  */
+
+export interface SecretCodeRecord {
+  /** Stable id (sha256 prefix of the code) for revoke/audit without plaintext. */
+  codeId: string;
+  /** sha256(code) hex. The plaintext is never stored. */
+  hash: string;
+  createdAt: string;
+  /** ISO string once revoked; null while active. */
+  revokedAt: string | null;
+}
 
 export interface OwnerRecord {
   ownerId: string;
@@ -22,8 +37,10 @@ export interface OwnerRecord {
   githubLogin: string;
   /** Dev-local secret. In prod this lives in TinyCloud Secrets. */
   githubToken: string | null;
-  /** The secret code a requester must present. Compared in constant time. */
-  secretCode: string;
+  /** The owner's Ethereum address (lowercased) — used to authenticate them. */
+  ownerAddress: string | null;
+  /** Active + revoked secret codes (hashes only). */
+  codes: SecretCodeRecord[];
   createdAt: string;
 }
 
@@ -61,32 +78,55 @@ function generateOwnerId(): string {
   return 'own_' + randomBytes(8).toString('hex');
 }
 
+export function hashCode(code: string): string {
+  return createHash('sha256').update(code).digest('hex');
+}
+
+export function codeIdFromHash(hash: string): string {
+  return hash.slice(0, 16);
+}
+
+function newCodeRecord(): { record: SecretCodeRecord; plaintext: string } {
+  const plaintext = generateSecretCode();
+  const hash = hashCode(plaintext);
+  return {
+    plaintext,
+    record: { codeId: codeIdFromHash(hash), hash, createdAt: new Date().toISOString(), revokedAt: null },
+  };
+}
+
 export interface CreateOwnerInput {
   githubLogin: string;
   githubToken?: string | null;
+  ownerAddress?: string | null;
 }
 
 export interface CreateOwnerResult {
   ownerId: string;
+  /** The first code's plaintext — shown ONCE, never stored. */
   secretCode: string;
+  codeId: string;
   githubLogin: string;
   hasGithubToken: boolean;
 }
 
 export function createOwner(input: CreateOwnerInput): CreateOwnerResult {
   const data = load();
+  const { record: codeRecord, plaintext } = newCodeRecord();
   const record: OwnerRecord = {
     ownerId: generateOwnerId(),
     githubLogin: input.githubLogin,
     githubToken: input.githubToken ?? null,
-    secretCode: generateSecretCode(),
+    ownerAddress: input.ownerAddress ? input.ownerAddress.toLowerCase() : null,
+    codes: [codeRecord],
     createdAt: new Date().toISOString(),
   };
   data.owners.push(record);
   persist(data);
   return {
     ownerId: record.ownerId,
-    secretCode: record.secretCode,
+    secretCode: plaintext,
+    codeId: codeRecord.codeId,
     githubLogin: record.githubLogin,
     hasGithubToken: record.githubToken !== null,
   };
@@ -97,27 +137,100 @@ export function findOwnerById(ownerId: string): OwnerRecord | null {
   return load().owners.find((o) => o.ownerId === ownerId) ?? null;
 }
 
+/** Lookup an owner by their (lowercased) Ethereum address. */
+export function findOwnerByAddress(address: string): OwnerRecord | null {
+  const addr = address.toLowerCase();
+  return load().owners.find((o) => o.ownerAddress === addr) ?? null;
+}
+
 /**
  * Constant-time lookup of an owner by secret code.
  *
- * We compare the submitted code against EVERY stored code with
- * timingSafeEqual, accumulating the match, so lookup time does not reveal
- * which (or whether any) owner matched. Returns the owner or null.
+ * Hashes the submitted code, then compares against EVERY stored ACTIVE hash
+ * with timingSafeEqual, accumulating the match, so lookup time does not reveal
+ * which (or whether any) owner/code matched. Returns the owner or null.
  */
 export function findOwnerByCode(submittedCode: string): OwnerRecord | null {
   const data = load();
-  const submitted = Buffer.from(submittedCode, 'utf8');
+  const submittedHash = Buffer.from(hashCode(submittedCode), 'utf8');
   let matched: OwnerRecord | null = null;
 
   for (const owner of data.owners) {
-    const stored = Buffer.from(owner.secretCode, 'utf8');
-    // timingSafeEqual requires equal lengths; guard without early-returning on
-    // the hot path so timing stays bounded by the stored set, not the input.
-    const isMatch =
-      stored.length === submitted.length && timingSafeEqual(stored, submitted);
-    if (isMatch) {
-      matched = owner;
+    for (const codeRec of owner.codes) {
+      if (codeRec.revokedAt !== null) continue;
+      const stored = Buffer.from(codeRec.hash, 'utf8');
+      const isMatch =
+        stored.length === submittedHash.length && timingSafeEqual(stored, submittedHash);
+      if (isMatch) {
+        matched = owner;
+      }
     }
   }
   return matched;
+}
+
+// ── Code management (owner-authenticated) ────────────────────────────
+
+export interface CodeSummary {
+  codeId: string;
+  createdAt: string;
+  revokedAt: string | null;
+  active: boolean;
+}
+
+function summarize(code: SecretCodeRecord): CodeSummary {
+  return {
+    codeId: code.codeId,
+    createdAt: code.createdAt,
+    revokedAt: code.revokedAt,
+    active: code.revokedAt === null,
+  };
+}
+
+/** List an owner's codes (metadata only — never the hash or plaintext). */
+export function listCodes(ownerId: string): CodeSummary[] {
+  const owner = findOwnerById(ownerId);
+  if (!owner) throw new Error('unknown owner');
+  return owner.codes.map(summarize);
+}
+
+/** Mint a new code for an owner. Returns the plaintext ONCE. */
+export function createCode(ownerId: string): { codeId: string; secretCode: string } {
+  const data = load();
+  const owner = data.owners.find((o) => o.ownerId === ownerId);
+  if (!owner) throw new Error('unknown owner');
+  const { record, plaintext } = newCodeRecord();
+  owner.codes.push(record);
+  persist(data);
+  return { codeId: record.codeId, secretCode: plaintext };
+}
+
+/** Revoke a specific code by codeId. Idempotent. */
+export function revokeCode(ownerId: string, codeId: string): { codeId: string; revokedAt: string } {
+  const data = load();
+  const owner = data.owners.find((o) => o.ownerId === ownerId);
+  if (!owner) throw new Error('unknown owner');
+  const code = owner.codes.find((c) => c.codeId === codeId);
+  if (!code) throw new Error('unknown codeId');
+  if (code.revokedAt === null) code.revokedAt = new Date().toISOString();
+  persist(data);
+  return { codeId: code.codeId, revokedAt: code.revokedAt };
+}
+
+/**
+ * Rotate: revoke ALL active codes and mint one fresh code. Returns the new
+ * plaintext ONCE.
+ */
+export function rotateCodes(ownerId: string): { codeId: string; secretCode: string } {
+  const data = load();
+  const owner = data.owners.find((o) => o.ownerId === ownerId);
+  if (!owner) throw new Error('unknown owner');
+  const now = new Date().toISOString();
+  for (const c of owner.codes) {
+    if (c.revokedAt === null) c.revokedAt = now;
+  }
+  const { record, plaintext } = newCodeRecord();
+  owner.codes.push(record);
+  persist(data);
+  return { codeId: record.codeId, secretCode: plaintext };
 }

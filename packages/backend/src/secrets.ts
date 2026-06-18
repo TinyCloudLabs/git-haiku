@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 
 import { config } from './config';
 import { loadDelegation } from './delegation-store';
+import { getBackendIdentity } from './identity';
 import { SECRET_NAMES, type SecretName } from './policy';
 import type { OwnerRecord } from './store';
 
@@ -71,15 +72,11 @@ class TcCliSecretsProvider implements SecretsProvider {
   private readonly tcEntry = resolveTcEntry();
 
   async getOwnerSecrets(owner: OwnerRecord): Promise<OwnerSecrets> {
-    const privateKey = config.backendPrivateKey;
-    if (!privateKey) {
-      throw new Error(
-        'tc-cli provider requires GITHAIKU_BACKEND_PRIVATE_KEY (the backend stable identity ' +
-          'that owners delegate to).',
-      );
-    }
+    // The backend stable key: dstack-derived in-TEE, env in dev. Same identity
+    // that signed in and that owners delegated to.
+    const { privateKey } = await getBackendIdentity();
 
-    const stored = loadDelegation(owner.ownerId);
+    const stored = await loadDelegation(owner.ownerId);
     if (!stored) {
       throw new Error(
         `tc-cli provider: no stored delegation for owner ${owner.ownerId}. ` +

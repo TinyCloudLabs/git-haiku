@@ -165,22 +165,38 @@ async function main(): Promise<void> {
     // --- Backend server: create owner, deliver delegation, run haiku -----
     const { buildServer } = await import('../src/server');
     const { createOwner } = await import('../src/store');
-    const app = buildServer();
+    const { buildAuthMessage } = await import('../src/auth');
+    const app = await buildServer();
     await app.ready();
 
     const ownerAddress = owner.did.split(':').at(-1)!;
-    const created = createOwner({ githubLogin: GITHUB_LOGIN });
+    // Bind the backend owner record to the owner's eth address so the
+    // owner-authenticated /api/delegations endpoint accepts it.
+    const created = createOwner({ githubLogin: GITHUB_LOGIN, ownerAddress });
     log(`backend owner created: ${created.ownerId}`);
 
     // server-info advertises the policy + backend did.
     const info = await app.inject({ method: 'GET', url: '/api/server-info' });
     log(`server-info: ${info.body}`);
 
-    // POST the delegation.
+    // The owner signs a SIWE-style auth payload (proves control of the address).
+    const { privateKeyToAccount } = await import('viem/accounts');
+    const ownerAcct = privateKeyToAccount(OWNER_KEY as `0x${string}`);
+    const nonceRes = await app.inject({ method: 'GET', url: '/api/auth/nonce' });
+    const { nonce } = JSON.parse(nonceRes.body) as { nonce: string };
+    const signature = await ownerAcct.signMessage({ message: buildAuthMessage(nonce) });
+    const authHeaders = {
+      'x-githaiku-address': ownerAcct.address,
+      'x-githaiku-nonce': nonce,
+      'x-githaiku-signature': signature,
+    };
+
+    // POST the delegation (owner-authenticated via headers).
     const delRes = await app.inject({
       method: 'POST',
       url: '/api/delegations',
-      payload: { ownerId: created.ownerId, ownerAddress, serialized },
+      headers: authHeaders,
+      payload: { ownerId: created.ownerId, serialized },
     });
     if (delRes.statusCode !== 201) {
       throw new Error(`POST /api/delegations failed: ${delRes.statusCode} ${delRes.body}`);
