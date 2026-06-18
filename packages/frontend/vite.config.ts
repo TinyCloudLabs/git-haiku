@@ -1,5 +1,6 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
+import { nodePolyfills } from 'vite-plugin-node-polyfills';
 
 // Default to the portless backend URL (https://api.githaiku.localhost). Under
 // portless, NODE_EXTRA_CA_CERTS is auto-set so this Vite process trusts the
@@ -8,7 +9,18 @@ import { defineConfig } from 'vite';
 const BACKEND = process.env.GITHAIKU_BACKEND_URL ?? 'https://api.githaiku.localhost';
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    // The TinyCloud web-sdk uses Node `Buffer`/`process` for crypto (base64↔bytes,
+    // delegation + secrets encryption). Polyfill the globals so secrets.put /
+    // materializeDelegation work in the browser. Same as tinychat.
+    nodePolyfills({ globals: { Buffer: true, process: true, global: true } }),
+  ],
+  // The web-sdk ships an inlined wasm bundle; excluding it from prebundling
+  // avoids esbuild choking on the wasm/eval (matches listen).
+  optimizeDeps: {
+    exclude: ['@tinycloud/web-sdk'],
+  },
   server: {
     // Honor portless's assigned port: portless sets PORT in the env, but Vite
     // ignores PORT (it only respects --port, which portless can't inject when it

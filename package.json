@@ -8,6 +8,8 @@
     "dev:plain": "GITHAIKU_BACKEND_URL=http://127.0.0.1:8787 concurrently -n backend,frontend -c green,cyan \"pnpm --filter @githaiku/backend dev\" \"pnpm --filter @githaiku/frontend dev\"",
     "seed": "pnpm --filter @githaiku/backend seed",
     "build": "pnpm -r --if-present build",
+    "build:frontend": "pnpm --filter @githaiku/frontend build",
+    "deploy:cf": "pnpm build:frontend && wrangler pages deploy packages/frontend/dist --project-name git-haiku",
     "lint": "pnpm -r --if-present lint",
     "test": "pnpm -r --if-present test",
     "docker:build": "docker buildx build --platform linux/amd64 -t ${GITHAIKU_BACKEND_IMAGE:-ghcr.io/tinycloudlabs/githaiku-backend:latest} .",
