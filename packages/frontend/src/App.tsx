@@ -98,7 +98,6 @@ function RequesterView() {
 function OwnerView() {
   const [githubLogin, setGithubLogin] = useState('');
   const [githubToken, setGithubToken] = useState('');
-  const [anthropicKey, setAnthropicKey] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<OwnerResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -109,7 +108,7 @@ function OwnerView() {
     setError(null);
     setResult(null);
     try {
-      setResult(await createOwner({ githubLogin: githubLogin.trim(), githubToken, anthropicKey }));
+      setResult(await createOwner({ githubLogin: githubLogin.trim(), githubToken }));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'setup failed');
     } finally {
@@ -121,8 +120,8 @@ function OwnerView() {
     <section className="card">
       <h2>Owner setup</h2>
       <p className="muted">
-        Store your GitHub login (and optionally a token + Anthropic key), then share the generated
-        secret code. With no token, haikus render from a built-in dev fixture.
+        Store your GitHub login (and optionally a token), then share the generated secret code. With
+        no token, haikus render from a built-in dev fixture.
       </p>
       <form onSubmit={onSubmit} className="form column">
         <label className="field">
@@ -132,10 +131,6 @@ function OwnerView() {
         <label className="field">
           <span>GitHub token (optional, dev-local)</span>
           <input className="input" type="password" value={githubToken} onChange={(e) => setGithubToken(e.target.value)} placeholder="ghp_…" />
-        </label>
-        <label className="field">
-          <span>Anthropic key (optional, deferred)</span>
-          <input className="input" type="password" value={anthropicKey} onChange={(e) => setAnthropicKey(e.target.value)} placeholder="sk-ant-…" />
         </label>
         <button className="primary" disabled={loading || !githubLogin.trim()}>
           {loading ? 'Saving…' : 'Generate secret code'}
@@ -147,8 +142,7 @@ function OwnerView() {
           <p>Share this secret code with requesters:</p>
           <code className="code-pill">{result.secretCode}</code>
           <p className="muted">
-            login: {result.githubLogin} · token stored: {String(result.hasGithubToken)} · anthropic
-            key stored: {String(result.hasAnthropicKey)}
+            login: {result.githubLogin} · token stored: {String(result.hasGithubToken)}
           </p>
         </div>
       )}

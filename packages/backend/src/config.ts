@@ -3,14 +3,24 @@
  *
  * The preview runs entirely in dev mode with explicit, labeled fallbacks. The
  * real trust-contract pieces (TinyCloud delegated secrets, dstack TEE
- * attestation, Anthropic generation) sit behind these flags and are OFF by
- * default so the preview needs no external infra.
+ * attestation) sit behind these flags and are OFF by default so the preview
+ * needs no external infra.
+ *
+ * Haiku generation defaults to RedPill (Phala's confidential LLM gateway) when
+ * REDPILL_API_KEY is present, and to the deterministic template otherwise — so
+ * the zero-secret portless preview still renders a haiku.
  */
+import { loadDevEnv } from './devenv';
 
-function flag(name: string, fallback = false): boolean {
-  const v = process.env[name];
-  if (v === undefined) return fallback;
-  return v === '1' || v.toLowerCase() === 'true';
+// DEV-ONLY: pull .githaiku-dev/dev.env into process.env BEFORE we read it.
+// No-op in production / the TEE. Must run before the config object is built.
+loadDevEnv();
+
+/** Which haiku generator to use. Default = redpill if a key is set, else deterministic. */
+function resolveHaikuGenerator(): 'redpill' | 'deterministic' {
+  const forced = process.env['GITHAIKU_HAIKU_GENERATOR'];
+  if (forced === 'redpill' || forced === 'deterministic') return forced;
+  return process.env['REDPILL_API_KEY'] ? 'redpill' : 'deterministic';
 }
 
 export const config = {
@@ -39,11 +49,27 @@ export const config = {
   nodeHost: process.env['GITHAIKU_NODE_HOST'] ?? 'https://node.tinycloud.xyz',
 
   /**
-   * Haiku generator:
-   *  - deterministic (default): template generator, NO Anthropic key needed.
-   *  - anthropic: DEFERRED behind this flag. Uses the owner's Anthropic key.
+   * Haiku generator selection:
+   *  - 'redpill': RedPill confidential-LLM-backed generator (the real path).
+   *    Default whenever REDPILL_API_KEY is set.
+   *  - 'deterministic': template generator, NO LLM key needed. Default when no
+   *    key is present, so the portless preview works with zero secrets.
+   * Force one explicitly via GITHAIKU_HAIKU_GENERATOR=redpill|deterministic.
    */
-  useAnthropic: flag('GITHAIKU_USE_ANTHROPIC', false),
+  haikuGenerator: resolveHaikuGenerator(),
+
+  /**
+   * RedPill (Phala confidential LLM gateway). Backend-GLOBAL service capability,
+   * NOT a per-owner secret. Key comes from env (REDPILL_API_KEY), never from the
+   * owner's delegated TinyCloud secrets.
+   */
+  redpill: {
+    baseUrl: process.env['REDPILL_BASE_URL'] ?? 'https://api.redpill.ai/v1',
+    // phala/ namespace = TEE-attestable, ECDSA-signed tier-1 inference.
+    model: process.env['REDPILL_MODEL'] ?? 'phala/deepseek-v4-flash',
+    apiKey: process.env['REDPILL_API_KEY'] ?? null,
+    timeoutMs: Number(process.env['REDPILL_TIMEOUT_MS'] ?? 20000),
+  },
 
   /** GitHub fetch bounds (commit-messages-only; hard caps). */
   github: {

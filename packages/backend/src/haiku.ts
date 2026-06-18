@@ -4,18 +4,23 @@ import type { HaikuLines } from '@githaiku/shared';
 
 import { config } from './config';
 import type { CommitMeta } from './github';
+import { RedpillHaikuGenerator } from './redpill';
 
 /**
  * Haiku core.
  *
- * DEFAULT (preview): a DETERMINISTIC template generator. Same commits in -> same
- * haiku out. No Anthropic key needed. This is the path that runs in the preview.
+ * DEFAULT (real path): a RedPill-backed generator (Phala confidential LLM
+ * gateway), used whenever REDPILL_API_KEY is set. It sees only bounded commit
+ * metadata and returns exactly three haiku lines.
  *
- * DEFERRED (behind GITHAIKU_USE_ANTHROPIC=1): an Anthropic-backed generator that
- * uses the owner's key. Stubbed here as the slot-in seam.
+ * FALLBACK (no key): a DETERMINISTIC template generator. Same commits in -> same
+ * haiku out. No LLM key needed. This is the path the zero-secret portless
+ * preview runs.
  *
- * Either way, the only thing that ever leaves is exactly three lines of haiku —
- * the output guard enforces that downstream.
+ * Selection lives in config.haikuGenerator (redpill if a key is present, else
+ * deterministic; force via GITHAIKU_HAIKU_GENERATOR). Either way, the only thing
+ * that ever leaves is three lines of haiku — the output guard enforces that
+ * downstream.
  */
 
 export interface HaikuGenerator {
@@ -79,23 +84,16 @@ class DeterministicHaikuGenerator implements HaikuGenerator {
   }
 }
 
-// --- Anthropic generator (DEFERRED behind a flag) -------------------------
+// --- Generator selection --------------------------------------------------
 
-class AnthropicHaikuGenerator implements HaikuGenerator {
-  readonly kind = 'anthropic';
-  constructor(private readonly apiKey: string | null) {}
-  async generate(_commits: CommitMeta[]): Promise<HaikuLines> {
-    if (!this.apiKey) {
-      throw new Error('GITHAIKU_USE_ANTHROPIC=1 but the owner has no Anthropic key');
-    }
-    // DEFERRED: real Anthropic call slots in here. Out of scope for the preview.
-    throw new Error('Anthropic haiku generation is deferred; run with the deterministic generator (default)');
-  }
-}
-
-export function makeHaikuGenerator(anthropicKey: string | null): HaikuGenerator {
-  if (config.useAnthropic) {
-    return new AnthropicHaikuGenerator(anthropicKey);
+/**
+ * Pick the generator from config. RedPill is the real path (default when
+ * REDPILL_API_KEY is set); the deterministic template is the no-key fallback.
+ * Imported lazily so the deterministic/preview path never pulls in RedPill.
+ */
+export function makeHaikuGenerator(): HaikuGenerator {
+  if (config.haikuGenerator === 'redpill') {
+    return new RedpillHaikuGenerator();
   }
   return new DeterministicHaikuGenerator();
 }

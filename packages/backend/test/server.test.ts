@@ -7,6 +7,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 // Point the dev store at a throwaway dir BEFORE importing modules that read config.
 process.env.GITHAIKU_DATA_DIR = mkdtempSync(join(tmpdir(), 'githaiku-test-'));
+// These tests assert the deterministic haiku; force it so the suite never makes
+// a live RedPill call (e.g. if REDPILL_API_KEY is present in the environment).
+process.env.GITHAIKU_HAIKU_GENERATOR = 'deterministic';
 
 const { buildServer } = await import('../src/server');
 const { createOwner } = await import('../src/store');

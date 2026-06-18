@@ -9,7 +9,6 @@ import { createOwner } from './store';
 const result = createOwner({
   githubLogin: process.env['SEED_GITHUB_LOGIN'] ?? 'octocat',
   githubToken: process.env['SEED_GITHUB_TOKEN'] ?? null,
-  anthropicKey: null,
 });
 
 // eslint-disable-next-line no-console

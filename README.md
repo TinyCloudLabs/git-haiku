@@ -1,6 +1,6 @@
 # Git Haiku
 
-An owner stores a GitHub token + Anthropic key and hands out a secret code. A
+An owner stores a GitHub token and hands out a secret code. A
 requester enters the code, clicks a button, and gets back **only** a haiku about
 the owner's recent git activity. The haiku is the toy; the real point is the
 trust contract: credentials never leak, the only data-bearing output is a 3-line
@@ -35,15 +35,16 @@ pnpm dev
 
 - **Requester flow (the hero):** secret code → `POST /api/haiku` → 3-line haiku
   in the guarded egress shape, or a clean denial.
-- **Owner setup:** store a GitHub login (+ optional token / Anthropic key),
-  mint a shareable secret code.
+- **Owner setup:** store a GitHub login (+ optional token), mint a shareable
+  secret code.
 - **Output guard (the trust core):** every haiku response is built into a plain
   snapshot, **sanitized → Ajv-validated → serialized**. The only data-bearing
   success field is `haiku.lines`; denials/errors carry only a short `reason`.
 - **Commit-messages-only GitHub adapter:** messages, repo names, timestamps —
   never file contents or diffs — hard-capped by count + time window.
-- **Deterministic haiku generator:** same commits → same haiku, no Anthropic key
-  needed.
+- **Haiku generator:** RedPill (Phala's confidential LLM gateway) when a
+  backend-global `REDPILL_API_KEY` is set; otherwise a deterministic template
+  (same commits → same haiku, no key needed) so the zero-secret preview works.
 
 Example success response:
 
@@ -67,7 +68,7 @@ Example denial (wrong code):
 |---|---|---|
 | Owner secrets | Gitignored local store (`.githaiku-dev/`) | TinyCloud Secrets via web-sdk |
 | Secret reads | `SecretsProvider=local` | `tc-cli` (`@tinycloud/cli@0.7.0-beta.1`, real `tc secrets get --delegation`) — `GITHAIKU_SECRETS_PROVIDER=tc-cli` (**wired**; needs a node + backend key + stored delegation, else fails loudly) |
-| Haiku generation | Deterministic template (default) | Anthropic via owner key — `GITHAIKU_USE_ANTHROPIC=1` (stubbed seam) |
+| Haiku generation | RedPill if `REDPILL_API_KEY` set, else deterministic template | RedPill (`phala/deepseek-v4-flash`, TEE-attestable) — backend-global key, **not** an owner secret |
 | GitHub token | Optional; falls back to a labeled dev fixture | Required, from owner's stored token |
 | `proof` block | Dev placeholder (`image_digest`/`attestation_url` = `null`) | dstack TEE attestation (`/attestation` is a stub) |
 | Owner auth | Local session (none) | OpenKey sign-in (seam left, untested e2e) |
@@ -86,7 +87,7 @@ degrading.
   `POST /api/delegations` (receive + validate + store an owner delegation).
   `SecretsProvider` interface (`local` + real `tc-cli`), backend identity
   (`identity.ts`, stable did:pkh; dstack key is a seam), per-owner delegation
-  store, commit-messages-only GitHub adapter, deterministic haiku core.
+  store, commit-messages-only GitHub adapter, RedPill + deterministic haiku core.
 - `packages/frontend` — Vite + React: requester page (hero) + owner setup page;
   proxies `/api` to the backend.
 
@@ -98,9 +99,28 @@ degrading.
 | `GITHAIKU_SECRETS_PROVIDER` | `local` | `local` or `tc-cli` (real delegated reads) |
 | `GITHAIKU_BACKEND_PRIVATE_KEY` | _(none)_ | tc-cli only: backend stable identity; its did:pkh is the delegation audience |
 | `GITHAIKU_NODE_HOST` | `https://node.tinycloud.xyz` | TinyCloud node for the backend identity + delegated reads |
-| `GITHAIKU_USE_ANTHROPIC` | `false` | Use Anthropic generator (deferred) |
+| `GITHAIKU_HAIKU_GENERATOR` | _(auto)_ | Force `redpill` or `deterministic`. Default: `redpill` if `REDPILL_API_KEY` is set, else `deterministic` |
+| `REDPILL_API_KEY` | _(none)_ | Backend-global RedPill key. When set, RedPill is the default generator. **Not** an owner secret |
+| `REDPILL_MODEL` | `phala/deepseek-v4-flash` | RedPill model (the `phala/` namespace = TEE-attestable inference) |
+| `REDPILL_BASE_URL` | `https://api.redpill.ai/v1` | RedPill API base URL |
+| `REDPILL_TIMEOUT_MS` | `20000` | RedPill request timeout |
 | `GITHAIKU_MAX_COMMITS` | `30` | GitHub commit cap |
 | `GITHAIKU_WINDOW_DAYS` | `30` | GitHub time window |
+
+### Local dev env (`.githaiku-dev/dev.env`)
+
+For the portless preview, the backend auto-loads `KEY=value` lines from
+`.githaiku-dev/dev.env` into `process.env` at startup **if the file exists** —
+so RedPill picks up `REDPILL_API_KEY` / `REDPILL_MODEL` without exporting them by
+hand. `.githaiku-dev/` is gitignored; never commit the key. The loader:
+
+- never overrides an already-set env var (an explicit export always wins),
+- is a no-op when `NODE_ENV=production` or `GITHAIKU_TEE=1` (never loads dev
+  secrets in production / the TEE),
+- never logs the values it loads.
+
+With no `dev.env` and no exported key, the preview falls back to the
+deterministic generator, so `pnpm dev` works with zero secrets.
 
 ## Test & build
 
@@ -112,9 +132,11 @@ pnpm build   # typecheck backend + build frontend
 ### Live delegated-secrets integration (real node, gated)
 
 Proves the real tc-cli path end-to-end against a **local** tinycloud-node: a
-throwaway owner puts both secrets, delegates KV-get + decrypt to the backend's
-stable `did:pkh`, delivers the delegation (`POST /api/delegations`), and the
-backend reads both secrets via the real `tc` CLI. Not part of `pnpm test`.
+throwaway owner puts GITHUB_TOKEN (the owner's only delegated secret), delegates
+KV-get + decrypt to the backend's stable `did:pkh`, delivers the delegation
+(`POST /api/delegations`), and the backend reads GITHUB_TOKEN via the real `tc`
+CLI. The RedPill LLM key is backend config, not an owner secret. Not part of
+`pnpm test`.
 
 ```bash
 GITHAIKU_LIVE=1 pnpm --filter @githaiku/backend test:live

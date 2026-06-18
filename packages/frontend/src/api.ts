@@ -23,13 +23,11 @@ export interface OwnerResult {
   secretCode: string;
   githubLogin: string;
   hasGithubToken: boolean;
-  hasAnthropicKey: boolean;
 }
 
 export async function createOwner(input: {
   githubLogin: string;
   githubToken: string;
-  anthropicKey: string;
 }): Promise<OwnerResult> {
   const res = await fetch('/api/owner', {
     method: 'POST',

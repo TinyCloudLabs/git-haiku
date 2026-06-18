@@ -2,17 +2,21 @@
  * Backend permission policy.
  *
  * The backend advertises exactly the permissions an owner must delegate so the
- * backend can read the owner's two secrets from TinyCloud Secrets:
+ * backend can read the owner's secret(s) from TinyCloud Secrets:
  *  - per-secret KV `get` on `vault/secrets/<NAME>` in the owner's `secrets`
  *    space (skipPrefix: true), and
  *  - `decrypt` on the owner's default encryption network.
+ *
+ * The owner delegates exactly ONE secret: GITHUB_TOKEN (their private data). The
+ * RedPill LLM key is backend-global config (env REDPILL_API_KEY), NOT an owner
+ * secret, so it is deliberately absent here.
  *
  * Shapes lifted from listen `backend/src/manifest.ts` + `routes/server-info.ts`.
  * Kept deliberately minimal — a hand-built array, no manifest resolution.
  */
 
-/** The two secrets the backend reads under delegation. */
-export const SECRET_NAMES = ['GITHUB_TOKEN', 'ANTHROPIC_API_KEY'] as const;
+/** The secret(s) the backend reads under delegation. GITHUB_TOKEN only. */
+export const SECRET_NAMES = ['GITHUB_TOKEN'] as const;
 export type SecretName = (typeof SECRET_NAMES)[number];
 
 export interface PermissionEntry {

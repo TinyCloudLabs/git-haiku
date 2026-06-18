@@ -34,7 +34,7 @@ export function buildServer(): FastifyInstance {
     service: 'githaiku-backend',
     mode: 'dev',
     secretsProvider: secrets.kind,
-    haikuGenerator: config.useAnthropic ? 'anthropic' : 'deterministic',
+    haikuGenerator: config.haikuGenerator,
   }));
 
   // --- Attestation stub (DEFERRED: real dstack quote/event_log/compose_hash)
@@ -48,9 +48,10 @@ export function buildServer(): FastifyInstance {
   }));
 
   // --- Server info (no auth): backend DID + the policy owners must delegate -
-  // Advertises the per-secret KV-get entries for GITHUB_TOKEN + ANTHROPIC_API_KEY
-  // plus the decrypt entry. Only meaningful under the tc-cli provider (it needs
-  // the backend's stable identity); under local there is no backend node.
+  // Advertises the per-secret KV-get entry for GITHUB_TOKEN (the owner's only
+  // delegated secret) plus the decrypt entry. The RedPill LLM key is backend
+  // config, NOT an owner secret, so it is not part of the delegation. Only
+  // meaningful under the tc-cli provider; under local there is no backend node.
   app.get('/api/server-info', async (_request, reply) => {
     if (secrets.kind !== 'tc-cli') {
       reply.code(404);
@@ -115,7 +116,6 @@ export function buildServer(): FastifyInstance {
     const body = (request.body ?? {}) as {
       githubLogin?: unknown;
       githubToken?: unknown;
-      anthropicKey?: unknown;
     };
 
     const githubLogin = typeof body.githubLogin === 'string' ? body.githubLogin.trim() : '';
@@ -127,7 +127,6 @@ export function buildServer(): FastifyInstance {
     const result = createOwner({
       githubLogin,
       githubToken: typeof body.githubToken === 'string' && body.githubToken ? body.githubToken : null,
-      anthropicKey: typeof body.anthropicKey === 'string' && body.anthropicKey ? body.anthropicKey : null,
     });
 
     reply.code(201);
@@ -164,8 +163,10 @@ export function buildServer(): FastifyInstance {
         return reply.send(serializeGuardedResponse(denial));
       }
 
-      // 4. Generate the haiku (deterministic by default; anthropic deferred).
-      const generator = makeHaikuGenerator(ownerSecrets.anthropicKey);
+      // 4. Generate the haiku (RedPill when REDPILL_API_KEY is set; the
+      //    deterministic template is the no-key fallback). Backend-global key —
+      //    NOT a per-owner secret.
+      const generator = makeHaikuGenerator();
       const lines = await generator.generate(commits);
 
       // 5. Build the guarded success shape. guardOutboundPayload sanitizes the

@@ -7,7 +7,7 @@ async function main(): Promise<void> {
   // eslint-disable-next-line no-console
   console.log(
     `[githaiku-backend] dev mode on http://${config.host}:${config.port} ` +
-      `(secrets=${config.secretsProvider}, haiku=${config.useAnthropic ? 'anthropic' : 'deterministic'})`,
+      `(secrets=${config.secretsProvider}, haiku=${config.haikuGenerator})`,
   );
 }
 

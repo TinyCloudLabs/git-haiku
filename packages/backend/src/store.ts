@@ -8,10 +8,10 @@ import { config } from './config';
  * DEV-LOCAL owner store.
  *
  * This is intentional, labeled dev behavior — NOT the real trust contract. In
- * production an owner's GitHub token + Anthropic key live in TinyCloud Secrets
- * and are read by the TEE under a delegation (deferred behind GITHAIKU_SECRETS_
- * PROVIDER=tc-cli). For the local preview we persist them to a gitignored JSON
- * file so the flow works end-to-end with no infra.
+ * production an owner's GitHub token lives in TinyCloud Secrets and is read by
+ * the TEE under a delegation (deferred behind GITHAIKU_SECRETS_PROVIDER=tc-cli).
+ * For the local preview we persist it to a gitignored JSON file so the flow
+ * works end-to-end with no infra.
  *
  * The file is written under config.dataDir which is in .gitignore.
  */
@@ -20,9 +20,8 @@ export interface OwnerRecord {
   ownerId: string;
   /** GitHub login whose recent commits the haiku describes. */
   githubLogin: string;
-  /** Dev-local secrets. In prod these live in TinyCloud Secrets. */
+  /** Dev-local secret. In prod this lives in TinyCloud Secrets. */
   githubToken: string | null;
-  anthropicKey: string | null;
   /** The secret code a requester must present. Compared in constant time. */
   secretCode: string;
   createdAt: string;
@@ -65,7 +64,6 @@ function generateOwnerId(): string {
 export interface CreateOwnerInput {
   githubLogin: string;
   githubToken?: string | null;
-  anthropicKey?: string | null;
 }
 
 export interface CreateOwnerResult {
@@ -73,7 +71,6 @@ export interface CreateOwnerResult {
   secretCode: string;
   githubLogin: string;
   hasGithubToken: boolean;
-  hasAnthropicKey: boolean;
 }
 
 export function createOwner(input: CreateOwnerInput): CreateOwnerResult {
@@ -82,7 +79,6 @@ export function createOwner(input: CreateOwnerInput): CreateOwnerResult {
     ownerId: generateOwnerId(),
     githubLogin: input.githubLogin,
     githubToken: input.githubToken ?? null,
-    anthropicKey: input.anthropicKey ?? null,
     secretCode: generateSecretCode(),
     createdAt: new Date().toISOString(),
   };
@@ -93,7 +89,6 @@ export function createOwner(input: CreateOwnerInput): CreateOwnerResult {
     secretCode: record.secretCode,
     githubLogin: record.githubLogin,
     hasGithubToken: record.githubToken !== null,
-    hasAnthropicKey: record.anthropicKey !== null,
   };
 }
 

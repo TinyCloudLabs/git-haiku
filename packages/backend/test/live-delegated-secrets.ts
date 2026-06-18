@@ -3,10 +3,11 @@
  *
  * GATED: only runs with GITHAIKU_LIVE=1 (never in the default headless test
  * run). NOT mocked — stands up a real local tinycloud-node, uses a real OWNER
- * identity to put two secrets, delegates KV-get + decrypt to the BACKEND's
- * stable did:pkh (audience = pkh, the proven fix), delivers the delegation to
- * the backend (POST /api/delegations), and triggers the haiku flow so the
- * backend reads both secrets via the REAL `tc` CLI.
+ * identity to put GITHUB_TOKEN (the owner's only delegated secret), delegates
+ * KV-get + decrypt to the BACKEND's stable did:pkh (audience = pkh, the proven
+ * fix), delivers the delegation to the backend (POST /api/delegations), and
+ * triggers the haiku flow so the backend reads GITHUB_TOKEN via the REAL `tc`
+ * CLI. The RedPill LLM key is backend config, NOT an owner secret.
  *
  *   GITHAIKU_LIVE=1 pnpm --filter @githaiku/backend tsx test/live-delegated-secrets.ts
  *
@@ -36,13 +37,12 @@ const OWNER_KEY = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f
 const BACKEND_KEY = '0x8b3a350cf5c34c9194ca3a545d9f2bc5b642b3ee6cca3a637f1d2d1765f37c13';
 const NODE_SECRET = 'dGlueWNsb3VkLWdpdGhhaWt1LWxpdmUtc3RhdGljLXNlY3JldC0zMjBi';
 
-// Secrets the owner stores. GITHUB_TOKEN defaults to a fixture (proves the
-// delegated read; a fixture token 401s at GitHub so the haiku path yields a
+// The owner's only delegated secret. GITHUB_TOKEN defaults to a fixture (proves
+// the delegated read; a fixture token 401s at GitHub so the haiku path yields a
 // guarded denial). Set GITHAIKU_LIVE_GITHUB_TOKEN to a real read-only token to
 // also drive a real commit fetch -> rendered haiku.
 const GITHUB_TOKEN =
   process.env['GITHAIKU_LIVE_GITHUB_TOKEN'] ?? 'ghp_live_fixture_0123456789abcdefABCDEF';
-const ANTHROPIC_API_KEY = 'sk-ant-live-fixture-0123456789abcdef';
 const GITHUB_LOGIN = process.env['GITHAIKU_LIVE_GITHUB_LOGIN'] ?? 'octocat';
 
 function log(msg: string): void {
@@ -109,6 +109,9 @@ async function main(): Promise<void> {
   process.env['GITHAIKU_NODE_HOST'] = NODE_HOST;
   process.env['GITHAIKU_BACKEND_PRIVATE_KEY'] = BACKEND_KEY;
   process.env['GITHAIKU_DATA_DIR'] = appDataDir;
+  // This live test proves the GITHUB_TOKEN delegation path, not LLM generation.
+  // Force the deterministic generator so it never makes a live RedPill call.
+  process.env['GITHAIKU_HAIKU_GENERATOR'] = 'deterministic';
 
   try {
     log(`starting node (bin=${NODE_BIN}, port=${PORT})`);
@@ -132,18 +135,15 @@ async function main(): Promise<void> {
     const network = await owner.ensureEncryptionNetwork('default');
     log(`owner encryption network: ${network.networkId}`);
 
-    for (const [name, value] of [
-      ['GITHUB_TOKEN', GITHUB_TOKEN],
-      ['ANTHROPIC_API_KEY', ANTHROPIC_API_KEY],
-    ] as const) {
-      const put = await owner.secrets.put(name, value);
+    {
+      const put = await owner.secrets.put('GITHUB_TOKEN', GITHUB_TOKEN);
       if (!put.ok) {
-        throw new Error(`owner secrets.put(${name}) failed: ${put.error.code} ${put.error.message}`);
+        throw new Error(`owner secrets.put(GITHUB_TOKEN) failed: ${put.error.code} ${put.error.message}`);
       }
-      log(`owner put secret ${name}`);
+      log('owner put secret GITHUB_TOKEN');
     }
 
-    // One multi-resource delegation: KV-get on both secrets + decrypt. Audience
+    // One multi-resource delegation: KV-get on GITHUB_TOKEN + decrypt. Audience
     // is the backend's STABLE did:pkh (the proven fix). node-sdk 2.3.1-beta.0
     // activates this multi-resource delegation correctly.
     const delegation = await owner.delegateTo(backend.did, [
@@ -151,12 +151,6 @@ async function main(): Promise<void> {
         service: 'tinycloud.kv',
         space: 'secrets',
         path: 'vault/secrets/GITHUB_TOKEN',
-        actions: ['tinycloud.kv/get'],
-      },
-      {
-        service: 'tinycloud.kv',
-        space: 'secrets',
-        path: 'vault/secrets/ANTHROPIC_API_KEY',
         actions: ['tinycloud.kv/get'],
       },
       {
@@ -193,7 +187,7 @@ async function main(): Promise<void> {
     }
     log(`delegation accepted: ${delRes.body}`);
 
-    // Directly exercise the tc-cli provider so we PROVE both secrets were read
+    // Directly exercise the tc-cli provider so we PROVE GITHUB_TOKEN was read
     // via the real `tc` binary under the delegation.
     const { makeSecretsProvider } = await import('../src/secrets');
     const { findOwnerById } = await import('../src/store');
@@ -205,10 +199,7 @@ async function main(): Promise<void> {
     if (read.githubToken !== GITHUB_TOKEN) {
       throw new Error(`GITHUB_TOKEN mismatch: got ${JSON.stringify(read.githubToken)}`);
     }
-    if (read.anthropicKey !== ANTHROPIC_API_KEY) {
-      throw new Error(`ANTHROPIC_API_KEY mismatch: got ${JSON.stringify(read.anthropicKey)}`);
-    }
-    log('PROVED: backend read BOTH secrets via the real tc CLI under the delegation.');
+    log('PROVED: backend read GITHUB_TOKEN via the real tc CLI under the delegation.');
 
     // Trigger the guarded haiku flow end-to-end through the real /api/haiku
     // endpoint. With a fixture GITHUB_TOKEN the GitHub fetch 401s -> guarded
@@ -241,7 +232,7 @@ async function main(): Promise<void> {
     const { guardOutboundPayload } = await import('@githaiku/shared');
     const { devProof } = await import('../src/proof');
     const { commits } = await fetchRecentCommits({ githubLogin: GITHUB_LOGIN, githubToken: null });
-    const lines = await makeHaikuGenerator(read.anthropicKey).generate(commits);
+    const lines = await makeHaikuGenerator().generate(commits);
     const guarded = guardOutboundPayload({ allowed: true, haiku: { lines }, proof: devProof() });
     log(`rendered guarded haiku: ${JSON.stringify(guarded)}`);
     if (!('haiku' in guarded) || guarded.haiku.lines.length !== 3) {

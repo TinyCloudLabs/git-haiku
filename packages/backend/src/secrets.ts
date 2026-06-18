@@ -15,17 +15,19 @@ const execFileAsync = promisify(execFile);
 /**
  * Secrets boundary.
  *
- * - LOCAL (default): the owner's GitHub token + Anthropic key come straight from
- *   the gitignored dev store. No TinyCloud node needed.
- * - TC-CLI: the real trust contract. The owner's secrets live in TinyCloud
- *   Secrets; the backend reads them under the owner's delegation by invoking the
+ * - LOCAL (default): the owner's GitHub token comes straight from the gitignored
+ *   dev store. No TinyCloud node needed.
+ * - TC-CLI: the real trust contract. The owner's GITHUB_TOKEN lives in TinyCloud
+ *   Secrets; the backend reads it under the owner's delegation by invoking the
  *   real `tc` binary (`tc secrets get <NAME> --delegation <file> --host <node>
  *   --json`). Secrets stay in memory — never written to disk (except the
  *   transient delegation file, deleted immediately) or logs.
+ *
+ * The RedPill LLM key is backend-global config (env), NOT an owner secret, so it
+ * is not part of this boundary.
  */
 export interface OwnerSecrets {
   githubToken: string | null;
-  anthropicKey: string | null;
 }
 
 export interface SecretsProvider {
@@ -39,7 +41,6 @@ class LocalSecretsProvider implements SecretsProvider {
   async getOwnerSecrets(owner: OwnerRecord): Promise<OwnerSecrets> {
     return {
       githubToken: owner.githubToken,
-      anthropicKey: owner.anthropicKey,
     };
   }
 }
@@ -47,7 +48,6 @@ class LocalSecretsProvider implements SecretsProvider {
 /** Map secret NAME -> OwnerSecrets field. */
 const SECRET_FIELD: Record<SecretName, keyof OwnerSecrets> = {
   GITHUB_TOKEN: 'githubToken',
-  ANTHROPIC_API_KEY: 'anthropicKey',
 };
 
 /**
@@ -94,7 +94,7 @@ class TcCliSecretsProvider implements SecretsProvider {
     writeFileSync(delegationFile, stored.serialized, { encoding: 'utf8', mode: 0o600 });
 
     try {
-      const out: OwnerSecrets = { githubToken: null, anthropicKey: null };
+      const out: OwnerSecrets = { githubToken: null };
       for (const name of SECRET_NAMES) {
         out[SECRET_FIELD[name]] = await this.readSecret(name, delegationFile, privateKey);
       }
