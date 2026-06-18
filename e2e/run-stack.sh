@@ -15,7 +15,11 @@ NODE_BIN="${GITHAIKU_NODE_BIN:-/Users/samgbafa/Documents/github/tinycloud-dev/re
 PORT="${GITHAIKU_NODE_PORT:-8799}"
 DATADIR="$(mktemp -d -t githaiku-node-XXXX)"
 # Throwaway anvil-style backend key (local only). The owner key lives in OpenKey.
-export GITHAIKU_BACKEND_PRIVATE_KEY="${GITHAIKU_BACKEND_PRIVATE_KEY:-0x8b3a350cf5c34c9194ca3a545d9f2bc5b642b3ee6cca3a637f1d2d1765f37c13}"
+BACKEND_KEY_ENV="GITHAIKU_BACKEND_PRIVATE_KEY"
+if [[ -z "${!BACKEND_KEY_ENV:-}" ]]; then
+  printf -v "${BACKEND_KEY_ENV}" '%s' "0x8b3a350cf5c34c9194ca3a545d9f2bc5b642b3ee6cca3a637f1d2d1765f37c13"
+fi
+export "${BACKEND_KEY_ENV}"
 export GITHAIKU_SECRETS_PROVIDER=tc-cli
 export GITHAIKU_NODE_HOST="http://127.0.0.1:${PORT}"
 

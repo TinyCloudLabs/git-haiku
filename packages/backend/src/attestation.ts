@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 
 import { config } from './config';
-import { getBackendIdentity } from './identity';
-import { getDstackClient, inTee } from './tee';
+import { backendDidForPrivateKey, resolveBackendPrivateKey } from './identity';
+import { getDstackClient, inTee, markTeeVerified, shouldUseDstack } from './tee';
 
 /**
  * Attestation.
@@ -53,11 +53,35 @@ function buildReportData(did: string): string {
 
 let cached: Attestation | null = null;
 
+async function realAttestation(): Promise<RealAttestation> {
+  // resolveBackendPrivateKey() performs the required dstack getKey probe when
+  // dstack is configured/detected. Derive the DID locally so startup
+  // verification does not depend on TinyCloud node availability.
+  const privateKey = await resolveBackendPrivateKey();
+  const did = backendDidForPrivateKey(privateKey);
+  const client = getDstackClient();
+  const reportData = buildReportData(did);
+  const quote = await client.getQuote(reportData);
+  const info = await client.info();
+
+  return {
+    dev: false,
+    quote: quote.quote,
+    event_log: typeof quote.event_log === 'string' ? quote.event_log : JSON.stringify(quote.event_log),
+    compose_hash: info.compose_hash ?? null,
+    app_id: info.app_id ?? null,
+    instance_id: info.instance_id ?? null,
+    os_image_hash: info.os_image_hash ?? info.tcb_info?.os_image_hash ?? null,
+    report_data: reportData,
+    did,
+  };
+}
+
 /** Produce the attestation for this instance. Memoized (stable per process). */
 export async function getAttestation(): Promise<Attestation> {
   if (cached) return cached;
 
-  if (!inTee()) {
+  if (!shouldUseDstack()) {
     cached = {
       dev: true,
       note: 'dev stub — not running in a dstack TEE. No real TDX quote. proof.image_digest / attestation_url are dev placeholders.',
@@ -69,29 +93,29 @@ export async function getAttestation(): Promise<Attestation> {
     return cached;
   }
 
-  const { did } = await getBackendIdentity();
-  const client = getDstackClient();
-  const reportData = buildReportData(did);
-  const quote = await client.getQuote(reportData);
-  const info = await client.info();
-
-  cached = {
-    dev: false,
-    quote: quote.quote,
-    event_log: typeof quote.event_log === 'string' ? quote.event_log : JSON.stringify(quote.event_log),
-    compose_hash: info.compose_hash ?? null,
-    app_id: info.app_id ?? null,
-    instance_id: info.instance_id ?? null,
-    os_image_hash: info.os_image_hash ?? info.tcb_info?.os_image_hash ?? null,
-    report_data: reportData,
-    did,
-  };
+  cached = await realAttestation();
+  markTeeVerified();
   return cached;
 }
 
 /** Reset memoized attestation (tests only). */
 export function resetAttestation(): void {
   cached = null;
+}
+
+/**
+ * Startup gate for production/TEE deployments. TEE/prod intent must prove real
+ * dstack key derivation plus quote/info before the service listens. In local
+ * dev, a present dstack socket is also verified so proofs never claim real
+ * attestation from an unproven capability.
+ */
+export async function verifyTeeStartup(): Promise<void> {
+  if (!shouldUseDstack()) return;
+
+  const attestation = await getAttestation();
+  if (attestation.dev) {
+    throw new Error('TEE/prod mode requires real dstack attestation');
+  }
 }
 
 /**
@@ -109,6 +133,7 @@ export async function imageDigest(): Promise<string | null> {
  */
 export function attestationUrl(): string | null {
   if (!inTee()) return null;
+  if (cached?.dev !== false) return null;
   const base = config.publicUrl;
   if (!base) return null;
   return `${base.replace(/\/$/, '')}/attestation`;

@@ -23,6 +23,15 @@ function resolveHaikuGenerator(): 'redpill' | 'deterministic' {
   return process.env['REDPILL_API_KEY'] ? 'redpill' : 'deterministic';
 }
 
+function parseAllowedOrigins(): string[] {
+  const raw = process.env['GITHAIKU_ALLOWED_ORIGINS'];
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+}
+
 export const config = {
   port: Number(process.env['PORT'] ?? 8787),
   host: process.env['HOST'] ?? '127.0.0.1',
@@ -54,6 +63,12 @@ export const config = {
    * Only set in a real deployment; null in dev (placeholder proof).
    */
   publicUrl: process.env['GITHAIKU_PUBLIC_URL'] ?? null,
+
+  /**
+   * Browser origins allowed to call this backend. Empty means permissive only
+   * in local dev/test; production/TEE startup requires explicit origins.
+   */
+  allowedOrigins: parseAllowedOrigins(),
 
   /**
    * Haiku generator selection:

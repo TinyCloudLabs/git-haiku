@@ -11,8 +11,12 @@ import { DstackClient, type GetQuoteResponse, type InfoResponse } from '@phala/d
  * @phala/dstack-sdk DstackClient constructor THROWS, so we never construct it
  * unless the TEE is actually present.
  *
- * Detection: GITHAIKU_TEE=1 (set in the dstack compose) OR a dstack socket on
- * disk. Either signal means "we are in the TEE; use the real dstack RPCs".
+ * Detection is split into intent and verified capability:
+ *  - intent: GITHAIKU_TEE=1 or NODE_ENV=production means this process is
+ *    configured for real TEE/prod behavior and must fail startup if dstack does
+ *    not work.
+ *  - capability: only a successful dstack key derivation + quote/info probe
+ *    marks this process as verified in-TEE.
  */
 
 const DSTACK_SOCKET_PATHS = [
@@ -28,17 +32,34 @@ export function dstackSocketPresent(): boolean {
   return DSTACK_SOCKET_PATHS.some((p) => existsSync(p));
 }
 
-/**
- * True when we should use the real dstack RPCs: explicitly flagged in-TEE
- * (GITHAIKU_TEE=1) or a dstack socket is reachable. When this is false the
- * backend runs in dev mode (env-provided key, clearly-labeled dev attestation).
- */
+/** Configured intent: startup must prove dstack works in this mode. */
+export function teeModeRequested(): boolean {
+  return process.env['GITHAIKU_TEE'] === '1' || process.env['NODE_ENV'] === 'production';
+}
+
+/** We should attempt real dstack RPCs when intent is set or a socket is found. */
+export function shouldUseDstack(): boolean {
+  return teeModeRequested() || dstackSocketPresent();
+}
+
+let verifiedTee = false;
+
+/** Verified capability: true only after key derivation plus quote/info succeed. */
 export function inTee(): boolean {
-  return process.env['GITHAIKU_TEE'] === '1' || dstackSocketPresent();
+  return verifiedTee;
+}
+
+export function markTeeVerified(): void {
+  verifiedTee = true;
+}
+
+/** Reset verified capability (tests only). */
+export function resetTeeVerification(): void {
+  verifiedTee = false;
 }
 
 /**
- * Construct a dstack client. Caller MUST gate this behind inTee()/socket
+ * Construct a dstack client. Caller MUST gate this behind shouldUseDstack()
  * presence — the SDK constructor throws if no socket is reachable. We surface
  * that loudly rather than masking it.
  */

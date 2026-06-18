@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 // Isolated config BEFORE importing the server: a tiny rate limit so we can trip
 // it, and a throwaway data dir + forced deterministic generator.
@@ -13,6 +13,7 @@ process.env.GITHAIKU_HAIKU_RATE_WINDOW = '1 minute';
 
 const { buildServer } = await import('../src/server');
 const { createOwner } = await import('../src/store');
+const { resetHaikuRateLimits } = await import('../src/rate-limit');
 
 const app = await buildServer();
 let code: string;
@@ -26,8 +27,12 @@ afterAll(async () => {
   await app.close();
 });
 
+beforeEach(() => {
+  resetHaikuRateLimits();
+});
+
 describe('rate limiting on /api/haiku', () => {
-  it('429s after the per-key limit is exceeded', async () => {
+  it('429s after the matched owner limit is exceeded', async () => {
     const statuses: number[] = [];
     // 5 requests with the SAME code from the SAME (default) IP -> same key.
     for (let i = 0; i < 5; i++) {
@@ -37,5 +42,26 @@ describe('rate limiting on /api/haiku', () => {
     // First 3 allowed, the rest rate-limited.
     expect(statuses.filter((s) => s === 200)).toHaveLength(3);
     expect(statuses.filter((s) => s === 429).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('429s different invalid candidate codes from the same IP', async () => {
+    const statuses: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      const res = await app.inject({ method: 'POST', url: '/api/haiku', payload: { code: `wrong-${i}` } });
+      statuses.push(res.statusCode);
+    }
+    expect(statuses.slice(0, 3)).toEqual([200, 200, 200]);
+    expect(statuses.slice(3).every((status) => status === 429)).toBe(true);
+  });
+
+  it('temp-bans the IP after invalid brute-force attempts before code lookup succeeds', async () => {
+    for (let i = 0; i < 4; i++) {
+      await app.inject({ method: 'POST', url: '/api/haiku', payload: { code: `bad-${i}` } });
+    }
+
+    const res = await app.inject({ method: 'POST', url: '/api/haiku', payload: { code } });
+    expect(res.statusCode).toBe(429);
+    expect(JSON.parse(res.body)).toEqual({ allowed: false, reason: 'rate limited' });
+    expect(res.headers['retry-after']).toBeDefined();
   });
 });

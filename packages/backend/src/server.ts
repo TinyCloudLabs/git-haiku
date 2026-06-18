@@ -1,5 +1,4 @@
 import cors from '@fastify/cors';
-import rateLimit from '@fastify/rate-limit';
 import {
   type EgressPayload,
   guardOutboundPayload,
@@ -7,9 +6,9 @@ import {
 } from '@githaiku/shared';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 
-import { getAttestation } from './attestation';
+import { getAttestation, verifyTeeStartup } from './attestation';
 import { AuthError, nonceStore, verifyOwnerAuth, type OwnerAuth } from './auth';
-import { readAudit, recordAudit } from './audit';
+import { readAudit, recordAudit, recordInvalidCodeAudit } from './audit';
 import { config } from './config';
 import { storeDelegation } from './delegation-store';
 import { validateDelegation } from './delegations';
@@ -18,7 +17,12 @@ import { makeHaikuGenerator } from './haiku';
 import { getBackendIdentity } from './identity';
 import { backendPolicy, ownerDidFromAddress } from './policy';
 import { buildProof } from './proof';
-import { HAIKU_RATE_MAX, HAIKU_RATE_WINDOW, haikuRateKey } from './rate-limit';
+import {
+  checkHaikuRequestBackoff,
+  consumeInvalidHaikuAttempt,
+  consumeMatchedOwnerHaikuAttempt,
+  type HaikuRateLimitResult,
+} from './rate-limit';
 import { makeSecretsProvider } from './secrets';
 import {
   createCode,
@@ -42,31 +46,23 @@ import {
  * Public: /health, /attestation, /api/server-info, /api/auth/nonce, /api/haiku.
  */
 export async function buildServer(): Promise<FastifyInstance> {
+  await verifyTeeStartup();
+
   const app = Fastify({ logger: false });
   const secrets = makeSecretsProvider();
 
-  await app.register(cors, { origin: true });
-
-  // Rate limiter (global registration; applied per-route via config). Brute-force
-  // protection for /api/haiku, keyed by IP + code-hash.
-  await app.register(rateLimit, { global: false });
+  await app.register(cors, { origin: corsOrigin() });
 
   // --- Health (operational, not part of the haiku egress contract) --------
-  app.get('/health', async () => ({
-    ok: true,
-    service: 'githaiku-backend',
-    mode: config.secretsProvider === 'tc-cli' ? 'tc-cli' : 'dev',
-    secretsProvider: secrets.kind,
-    haikuGenerator: config.haikuGenerator,
-  }));
+  app.get('/health', async () => ({ ok: true }));
 
   // --- Attestation: real dstack TDX quote in-TEE, dev stub otherwise -------
   app.get('/attestation', async (_request, reply) => {
     try {
       return await getAttestation();
-    } catch (err) {
+    } catch {
       reply.code(503);
-      return { error: 'attestation_unavailable', message: err instanceof Error ? err.message : String(err) };
+      return { error: 'attestation_unavailable', message: 'attestation is unavailable' };
     }
   });
 
@@ -77,7 +73,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   app.get('/api/server-info', async (_request, reply) => {
     if (secrets.kind !== 'tc-cli') {
       reply.code(404);
-      return { error: 'server-info is only available under the tc-cli secrets provider' };
+      return { error: 'not_found' };
     }
     const identity = await getBackendIdentity();
     return {
@@ -147,7 +143,8 @@ export async function buildServer(): Promise<FastifyInstance> {
     }
 
     try {
-      const validated = validateDelegation(serialized);
+      const identity = await getBackendIdentity();
+      const validated = validateDelegation(serialized, identity.did);
       await storeDelegation({
         ownerId,
         serialized,
@@ -210,27 +207,32 @@ export async function buildServer(): Promise<FastifyInstance> {
   // --- Requester: code -> haiku (THE egress choke point) -------------------
   app.post(
     '/api/haiku',
-    {
-      config: {
-        rateLimit: {
-          max: HAIKU_RATE_MAX,
-          timeWindow: HAIKU_RATE_WINDOW,
-          keyGenerator: haikuRateKey,
-        },
-      },
-    },
     async (request, reply) => {
       reply.header('content-type', 'application/json');
 
       const body = (request.body ?? {}) as { code?: unknown };
       const code = typeof body.code === 'string' ? body.code.trim() : '';
 
+      const backoff = checkHaikuRequestBackoff(request);
+      if (!backoff.allowed) {
+        return sendRateLimited(reply, backoff);
+      }
+
       // 1. Validate the secret code (constant-time lookup).
       const owner = code ? findOwnerByCode(code) : null;
       if (!owner) {
-        await recordAudit({ code, ownerId: null, decision: 'deny', reason: 'invalid_code' });
+        const invalidLimit = consumeInvalidHaikuAttempt(request, code);
+        if (!invalidLimit.allowed) {
+          return sendRateLimited(reply, invalidLimit);
+        }
+        await recordInvalidCodeAudit({ ip: request.ip });
         const denial: EgressPayload = { allowed: false, reason: 'invalid code' };
         return reply.send(serializeGuardedResponse(denial));
+      }
+
+      const matchedLimit = consumeMatchedOwnerHaikuAttempt(request, owner.ownerId);
+      if (!matchedLimit.allowed) {
+        return sendRateLimited(reply, matchedLimit);
       }
 
       try {
@@ -265,7 +267,7 @@ export async function buildServer(): Promise<FastifyInstance> {
       } catch (err) {
         // Operational failure. Redacted to a denial carrying no commit data.
         await recordAudit({ code, ownerId: owner.ownerId, decision: 'deny', reason: 'error' });
-        reply.code(200);
+        reply.code(503);
         return reply.send(serializeGuardedResponse(err));
       }
     },
@@ -275,6 +277,20 @@ export async function buildServer(): Promise<FastifyInstance> {
 }
 
 // ── auth helpers ─────────────────────────────────────────────────────
+
+function corsOrigin(): true | string[] {
+  if (config.allowedOrigins.length > 0) return [...config.allowedOrigins];
+  if (process.env['NODE_ENV'] !== 'production' && process.env['GITHAIKU_TEE'] !== '1') return true;
+  throw new Error('GITHAIKU_ALLOWED_ORIGINS is required in production/TEE mode');
+}
+
+function sendRateLimited(reply: FastifyReply, result: Exclude<HaikuRateLimitResult, { allowed: true }>): FastifyReply {
+  const retryAfterSeconds = Math.max(1, Math.ceil(result.retryAfterMs / 1_000));
+  reply.code(429);
+  reply.header('retry-after', String(retryAfterSeconds));
+  const denial: EgressPayload = { allowed: false, reason: 'rate limited' };
+  return reply.send(serializeGuardedResponse(denial));
+}
 
 /**
  * Verify the owner-auth payload on a request; replies 401 + returns null on

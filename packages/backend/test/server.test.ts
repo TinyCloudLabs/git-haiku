@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -7,7 +7,8 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 // Point the dev store at a throwaway dir BEFORE importing modules that read config.
-process.env.GITHAIKU_DATA_DIR = mkdtempSync(join(tmpdir(), 'githaiku-test-'));
+const DATA_DIR = mkdtempSync(join(tmpdir(), 'githaiku-test-'));
+process.env.GITHAIKU_DATA_DIR = DATA_DIR;
 // These tests assert the deterministic haiku; force it so the suite never makes
 // a live RedPill call (e.g. if REDPILL_API_KEY is present in the environment).
 process.env.GITHAIKU_HAIKU_GENERATOR = 'deterministic';
@@ -18,6 +19,7 @@ process.env.GITHAIKU_HAIKU_RATE_MAX = '1000';
 const { buildServer } = await import('../src/server');
 const { createOwner } = await import('../src/store');
 const { buildAuthMessage } = await import('../src/auth');
+const { codeIdFor, resetAuditCoalescing } = await import('../src/audit');
 
 const app = await buildServer();
 
@@ -92,6 +94,25 @@ describe('POST /api/haiku', () => {
   it('returns a clean denial for a missing code', async () => {
     const res = await app.inject({ method: 'POST', url: '/api/haiku', payload: {} });
     expect(JSON.parse(res.body)).toEqual({ allowed: false, reason: 'invalid code' });
+  });
+
+  it('returns non-2xx guarded JSON for operational failures', async () => {
+    const realFetch = global.fetch;
+    global.fetch = (async () => new Response('upstream failed with commit secret', { status: 500 })) as typeof fetch;
+    try {
+      const failingCode = createOwner({
+        githubLogin: 'octocat',
+        githubToken: 'ghp_test_operational_failure',
+      }).secretCode;
+      const res = await app.inject({ method: 'POST', url: '/api/haiku', payload: { code: failingCode } });
+      expect(res.statusCode).toBe(503);
+      expect(JSON.parse(res.body)).toEqual({ allowed: false, reason: 'internal error' });
+      expect(res.body).not.toContain('GitHub');
+      expect(res.body).not.toContain('commit secret');
+      expect(res.body).not.toContain('ghp_test_operational_failure');
+    } finally {
+      global.fetch = realFetch;
+    }
   });
 });
 
@@ -180,6 +201,15 @@ describe('code management (create / revoke / rotate)', () => {
 });
 
 describe('audit log', () => {
+  function allAuditEntries(): Array<{ codeId: string; ownerId: string | null; reason: string }> {
+    const path = join(DATA_DIR, 'audit.log.jsonl');
+    if (!existsSync(path)) return [];
+    return readFileSync(path, 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { codeId: string; ownerId: string | null; reason: string });
+  }
+
   it('records allow/deny entries with NO secrets or commit data', async () => {
     // Wallet 5 = this owner.
     const created = await app.inject({
@@ -219,12 +249,28 @@ describe('audit log', () => {
   it('rejects unauthenticated audit reads', async () => {
     expect((await app.inject({ method: 'GET', url: '/api/audit' })).statusCode).toBe(401);
   });
+
+  it('coalesces invalid-code audit records by coarse IP/window instead of guessed code', async () => {
+    resetAuditCoalescing();
+    const before = allAuditEntries().filter((entry) => entry.reason === 'invalid_code').length;
+
+    await app.inject({ method: 'POST', url: '/api/haiku', payload: { code: 'guess-one' } });
+    await app.inject({ method: 'POST', url: '/api/haiku', payload: { code: 'guess-two' } });
+
+    const invalid = allAuditEntries().filter((entry) => entry.reason === 'invalid_code');
+    expect(invalid.length - before).toBe(1);
+    const latest = invalid.at(-1)!;
+    expect(latest.ownerId).toBeNull();
+    expect(latest.codeId).toMatch(/^invalid:[0-9a-f]{16}$/);
+    expect(latest.codeId).not.toBe(codeIdFor('guess-one'));
+    expect(latest.codeId).not.toBe(codeIdFor('guess-two'));
+  });
 });
 
 describe('GET /health', () => {
-  it('responds ok', async () => {
+  it('responds with liveness only', async () => {
     const res = await app.inject({ method: 'GET', url: '/health' });
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body).ok).toBe(true);
+    expect(JSON.parse(res.body)).toEqual({ ok: true });
   });
 });

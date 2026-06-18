@@ -36,6 +36,8 @@ export interface AuditEntry {
 
 const KV_PREFIX = 'audit/';
 const FILE_PATH = join(config.dataDir, 'audit.log.jsonl');
+const INVALID_AUDIT_WINDOW_MS = Number(process.env['GITHAIKU_INVALID_AUDIT_WINDOW_MS'] ?? 60_000);
+const invalidAuditWindows = new Set<string>();
 
 /**
  * Derive a stable, non-reversible id for a code so the audit log can group
@@ -43,6 +45,26 @@ const FILE_PATH = join(config.dataDir, 'audit.log.jsonl');
  */
 export function codeIdFor(code: string): string {
   return createHash('sha256').update(`githaiku-audit:${code}`).digest('hex').slice(0, 16);
+}
+
+function coarseIp(ip: string): string {
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(ip)) {
+    return ip.split('.').slice(0, 3).join('.') + '.0/24';
+  }
+  const parts = ip.split(':');
+  if (parts.length > 2) {
+    return parts.slice(0, 4).join(':') + '::/64';
+  }
+  return ip;
+}
+
+export function invalidAuditCodeId(ip: string, at = new Date()): string {
+  const windowStart = Math.floor(at.getTime() / INVALID_AUDIT_WINDOW_MS) * INVALID_AUDIT_WINDOW_MS;
+  const digest = createHash('sha256')
+    .update(`githaiku-invalid-audit:${coarseIp(ip)}:${windowStart}`)
+    .digest('hex')
+    .slice(0, 16);
+  return `invalid:${digest}`;
 }
 
 function useKv(): boolean {
@@ -62,6 +84,20 @@ function assertCleanEntry(entry: AuditEntry): void {
 function append(entry: AuditEntry): void {
   mkdirSync(dirname(FILE_PATH), { recursive: true });
   appendFileSync(FILE_PATH, `${JSON.stringify(entry)}\n`, 'utf8');
+}
+
+async function recordEntry(entry: AuditEntry): Promise<void> {
+  assertCleanEntry(entry);
+
+  if (!useKv()) {
+    append(entry);
+    return;
+  }
+  const { node } = await getBackendIdentity();
+  // Immutable key per entry => append-only (never overwrite/delete).
+  const owner = entry.ownerId ?? 'unknown';
+  const key = `${KV_PREFIX}${owner}/${entry.ts}-${Math.random().toString(36).slice(2, 10)}`;
+  await withSessionRefresh(node, () => node.kv.put(key, entry));
 }
 
 function readFile(ownerId: string): AuditEntry[] {
@@ -89,17 +125,24 @@ export async function recordAudit(input: {
     reason: input.reason,
     policyId: 'secret-code-v1',
   };
-  assertCleanEntry(entry);
+  await recordEntry(entry);
+}
 
-  if (!useKv()) {
-    append(entry);
-    return;
-  }
-  const { node } = await getBackendIdentity();
-  // Immutable key per entry => append-only (never overwrite/delete).
-  const owner = entry.ownerId ?? 'unknown';
-  const key = `${KV_PREFIX}${owner}/${entry.ts}-${Math.random().toString(36).slice(2, 10)}`;
-  await withSessionRefresh(node, () => node.kv.put(key, entry));
+export async function recordInvalidCodeAudit(input: { ip: string; at?: Date }): Promise<void> {
+  const at = input.at ?? new Date();
+  const codeId = invalidAuditCodeId(input.ip, at);
+  const windowKey = `${codeId}:${Math.floor(at.getTime() / INVALID_AUDIT_WINDOW_MS)}`;
+  if (invalidAuditWindows.has(windowKey)) return;
+  invalidAuditWindows.add(windowKey);
+
+  await recordEntry({
+    codeId,
+    ownerId: null,
+    ts: at.toISOString(),
+    decision: 'deny',
+    reason: 'invalid_code',
+    policyId: 'secret-code-v1',
+  });
 }
 
 /** Read an owner's audit trail (newest first). */
@@ -148,4 +191,9 @@ function parseEntry(raw: unknown): AuditEntry | null {
     return value as AuditEntry;
   }
   return null;
+}
+
+/** Reset invalid-attempt coalescing state (tests only). */
+export function resetAuditCoalescing(): void {
+  invalidAuditWindows.clear();
 }

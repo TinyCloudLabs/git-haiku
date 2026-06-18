@@ -2,10 +2,10 @@
 #
 # Git Haiku backend image (TEE-deployable to Phala dstack).
 #
-# Multi-stage: a deps/build stage installs the workspace and typechecks; the
-# runtime stage carries only what the backend needs to run (its source + the
-# shared package + production node_modules) and starts it via tsx. The RedPill
-# key, backend identity, node host, etc. are injected as dstack ENCRYPTED env at
+# Multi-stage: a deps/build stage installs the workspace, typechecks, and emits
+# a bundled JS backend; a deploy stage materializes production dependencies; the
+# runtime stage carries only dist + production node_modules. The RedPill key,
+# backend identity, node host, etc. are injected as dstack ENCRYPTED env at
 # deploy time — never baked into the image.
 #
 # amd64 is REQUIRED: Phala CVMs run on Intel TDX. Build with:
@@ -32,8 +32,12 @@ RUN pnpm install --frozen-lockfile --filter @githaiku/backend... --filter @githa
 COPY packages/shared packages/shared
 COPY packages/backend packages/backend
 
-# Typecheck both packages (fails the build on type errors).
-RUN pnpm --filter @githaiku/shared build && pnpm --filter @githaiku/backend build
+# Typecheck/bundle the backend (fails the build on type errors).
+RUN pnpm --filter @githaiku/backend build
+
+# ---- production dependency stage ----------------------------------------
+FROM build AS prod-deps
+RUN pnpm --filter @githaiku/backend deploy --prod /runtime
 
 # ---- runtime stage -------------------------------------------------------
 FROM --platform=linux/amd64 node:20-slim AS runtime
@@ -44,11 +48,10 @@ ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
 RUN corepack enable
 
-# Carry the installed workspace (node_modules + sources) from the build stage.
-COPY --from=build /app /app
+# Runtime carries the deployed backend package: package.json, dist, and
+# production node_modules only.
+COPY --from=prod-deps /runtime ./
 
-WORKDIR /app/packages/backend
 EXPOSE 8787
 
-# tsx runs the TypeScript entrypoint directly (tsx is a backend dependency).
-CMD ["pnpm", "start"]
+CMD ["node", "dist/index.js"]

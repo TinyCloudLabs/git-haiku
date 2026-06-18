@@ -1,8 +1,9 @@
 import { keccak256, type Hex } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 import { TinyCloudNode, type Manifest } from '@tinycloud/node-sdk';
 
 import { config } from './config';
-import { getDstackClient, inTee } from './tee';
+import { getDstackClient, shouldUseDstack } from './tee';
 
 /**
  * Backend identity.
@@ -35,7 +36,7 @@ const BACKEND_KEY_PURPOSE = 'backend';
  * same shape TinyCloudNode expects). Deterministic per app measurement + path,
  * so the backend DID is stable across reboots of the same image.
  */
-async function deriveTeeBackendKey(): Promise<Hex> {
+export async function deriveTeeBackendKey(): Promise<Hex> {
   const client = getDstackClient();
   const res = await client.getKey(BACKEND_KEY_PATH, BACKEND_KEY_PURPOSE);
   if (!(res.key instanceof Uint8Array) || res.key.length === 0) {
@@ -45,13 +46,23 @@ async function deriveTeeBackendKey(): Promise<Hex> {
   return keccak256(res.key);
 }
 
+export function backendDidForPrivateKey(privateKey: string): string {
+  const account = privateKeyToAccount(privateKey as Hex);
+  return `did:pkh:eip155:1:${account.address}`;
+}
+
+let cachedPrivateKey: string | null = null;
+
 /**
  * Resolve the backend private key for this process: dstack-derived in-TEE, env
  * fallback otherwise. Fails loudly if neither is available — never silent.
  */
-async function resolveBackendPrivateKey(): Promise<string> {
-  if (inTee()) {
-    return deriveTeeBackendKey();
+export async function resolveBackendPrivateKey(): Promise<string> {
+  if (cachedPrivateKey) return cachedPrivateKey;
+
+  if (shouldUseDstack()) {
+    cachedPrivateKey = await deriveTeeBackendKey();
+    return cachedPrivateKey;
   }
   const envKey = config.backendPrivateKey;
   if (!envKey) {
@@ -61,6 +72,7 @@ async function resolveBackendPrivateKey(): Promise<string> {
         'Set it, run inside a dstack TEE (GITHAIKU_TEE=1), or use GITHAIKU_SECRETS_PROVIDER=local.',
     );
   }
+  cachedPrivateKey = envKey;
   return envKey;
 }
 
@@ -128,6 +140,7 @@ export async function getBackendIdentity(): Promise<BackendIdentity> {
 /** Reset memoized identity (tests only). */
 export function resetBackendIdentity(): void {
   cached = null;
+  cachedPrivateKey = null;
 }
 
 // ── Session refresh wrapper (lifted from listen identity.ts) ──────────

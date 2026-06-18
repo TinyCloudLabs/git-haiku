@@ -24,7 +24,7 @@ export const APP_MANIFEST: Manifest = {
   description: 'Verifiable haiku from your recent commit messages, generated inside an attested TEE.',
   defaults: true,
   secrets: {
-    GITHUB_TOKEN: ['read'],
+    GITHUB_TOKEN: ['read', 'write'],
   },
   permissions: [],
 };

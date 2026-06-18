@@ -67,14 +67,15 @@ function coversDecrypt(resources: DelegationResource[]): boolean {
 export interface ValidatedDelegation {
   delegation: PortableDelegation;
   resources: DelegationResource[];
-  expiresAt: string | null;
+  expiresAt: string;
 }
 
 /**
  * Validate a serialized delegation covers the backend policy (both secret
- * KV-get paths + a decrypt entry). Throws loudly on any gap.
+ * KV-get paths + a decrypt entry), is addressed to this backend DID, and has a
+ * valid future expiry. Throws loudly on any gap.
  */
-export function validateDelegation(serialized: string): ValidatedDelegation {
+export function validateDelegation(serialized: string, expectedBackendDid: string): ValidatedDelegation {
   let delegation: PortableDelegation;
   try {
     delegation = deserializeDelegation(serialized);
@@ -83,6 +84,12 @@ export function validateDelegation(serialized: string): ValidatedDelegation {
   }
 
   const resources = extractResources(delegation);
+  const delegateDid = delegationAudienceDid(delegation);
+  if (delegateDid !== expectedBackendDid) {
+    throw new Error('delegation audience does not match this backend DID');
+  }
+
+  const expiresAt = parseFutureExpiry(delegation);
 
   for (const name of SECRET_NAMES) {
     if (!coversSecretPath(resources, secretVaultPath(name))) {
@@ -93,13 +100,31 @@ export function validateDelegation(serialized: string): ValidatedDelegation {
     throw new Error('delegation does not cover tinycloud.encryption/decrypt');
   }
 
-  return { delegation, resources, expiresAt: expiryIso(delegation) };
+  return { delegation, resources, expiresAt };
 }
 
-function expiryIso(delegation: PortableDelegation): string | null {
+function delegationAudienceDid(delegation: PortableDelegation): string {
+  const raw = (delegation as unknown as { delegateDID?: unknown }).delegateDID;
+  if (typeof raw !== 'string' || raw.length === 0) {
+    throw new Error('delegation is missing delegateDID');
+  }
+  return raw;
+}
+
+function parseFutureExpiry(delegation: PortableDelegation): string {
   const exp = (delegation as unknown as { expiry?: unknown }).expiry;
-  if (exp instanceof Date) return exp.toISOString();
-  if (typeof exp === 'string') return exp;
-  if (typeof exp === 'number') return new Date(exp).toISOString();
-  return null;
+  let date: Date | null = null;
+  if (exp instanceof Date) {
+    date = exp;
+  } else if (typeof exp === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(exp)) {
+    date = new Date(exp);
+  }
+
+  if (!date || Number.isNaN(date.getTime())) {
+    throw new Error('delegation expiry is missing or unparseable');
+  }
+  if (date.getTime() <= Date.now()) {
+    throw new Error('delegation is expired');
+  }
+  return date.toISOString();
 }

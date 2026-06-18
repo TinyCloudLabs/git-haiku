@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { composeOwnerRequest } from '../src/lib/tinycloud';
+import { APP_MANIFEST } from '../src/lib/appManifest';
 import type { ServerInfo } from '../src/api';
 
 /**
@@ -40,6 +41,10 @@ const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
 describe('composeOwnerRequest', () => {
   const composed = composeOwnerRequest(SERVER_INFO, OWNER_DID);
 
+  it('grants the owner app the valid secret write action needed by secrets.put', () => {
+    expect(APP_MANIFEST.secrets?.GITHUB_TOKEN).toEqual(expect.arrayContaining(['read', 'write']));
+  });
+
   it('produces a delegation target for the backend DID', () => {
     const target = composed.delegationTargets.find((t) => t.did === BACKEND_DID);
     expect(target).toBeDefined();
@@ -52,6 +57,8 @@ describe('composeOwnerRequest', () => {
     );
     expect(kv).toBeDefined();
     expect(kv!.actions.map(String).join(',')).toContain('get');
+    expect(kv!.actions.map(String).join(',')).not.toContain('put');
+    expect(kv!.actions.map(String).join(',')).not.toContain('create');
   });
 
   it('the target carries a decrypt bound to the OWNER default encryption network', () => {
