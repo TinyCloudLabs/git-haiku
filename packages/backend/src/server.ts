@@ -51,6 +51,18 @@ export async function buildServer(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
   const secrets = makeSecretsProvider();
 
+  app.setErrorHandler((error, request, reply) => {
+    if (request.url.startsWith('/api/haiku')) {
+      reply.code(503);
+      reply.header('content-type', 'application/json');
+      return reply.send(serializeGuardedResponse(error));
+    }
+
+    const statusCode = redactedStatusCode(error);
+    reply.code(statusCode);
+    return { error: statusCode === 400 ? 'bad_request' : 'unavailable' };
+  });
+
   await app.register(cors, { origin: corsOrigin() });
 
   // --- Health (operational, not part of the haiku egress contract) --------
@@ -75,12 +87,17 @@ export async function buildServer(): Promise<FastifyInstance> {
       reply.code(404);
       return { error: 'not_found' };
     }
-    const identity = await getBackendIdentity();
-    return {
-      did: identity.did,
-      name: 'Git Haiku Backend',
-      permissions: backendPolicy(),
-    };
+    try {
+      const identity = await getBackendIdentity();
+      return {
+        did: identity.did,
+        name: 'Git Haiku Backend',
+        permissions: backendPolicy(),
+      };
+    } catch {
+      reply.code(503);
+      return { error: 'unavailable' };
+    }
   });
 
   // --- Owner setup (OWNER-AUTHENTICATED) ----------------------------------
@@ -225,7 +242,12 @@ export async function buildServer(): Promise<FastifyInstance> {
         if (!invalidLimit.allowed) {
           return sendRateLimited(reply, invalidLimit);
         }
-        await recordInvalidCodeAudit({ ip: request.ip });
+        try {
+          await recordInvalidCodeAudit({ ip: request.ip });
+        } catch (err) {
+          reply.code(503);
+          return reply.send(serializeGuardedResponse(err));
+        }
         const denial: EgressPayload = { allowed: false, reason: 'invalid code' };
         return reply.send(serializeGuardedResponse(denial));
       }
@@ -290,6 +312,14 @@ function sendRateLimited(reply: FastifyReply, result: Exclude<HaikuRateLimitResu
   reply.header('retry-after', String(retryAfterSeconds));
   const denial: EgressPayload = { allowed: false, reason: 'rate limited' };
   return reply.send(serializeGuardedResponse(denial));
+}
+
+function redactedStatusCode(error: unknown): number {
+  if (error && typeof error === 'object' && 'statusCode' in error) {
+    const statusCode = (error as { statusCode?: unknown }).statusCode;
+    if (typeof statusCode === 'number' && statusCode >= 400 && statusCode < 500) return statusCode;
+  }
+  return 503;
 }
 
 /**

@@ -2,7 +2,8 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import type { FastifyRequest } from 'fastify';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Isolated config BEFORE importing the server: a tiny rate limit so we can trip
 // it, and a throwaway data dir + forced deterministic generator.
@@ -10,10 +11,16 @@ process.env.GITHAIKU_DATA_DIR = mkdtempSync(join(tmpdir(), 'githaiku-rl-test-'))
 process.env.GITHAIKU_HAIKU_GENERATOR = 'deterministic';
 process.env.GITHAIKU_HAIKU_RATE_MAX = '3';
 process.env.GITHAIKU_HAIKU_RATE_WINDOW = '1 minute';
+process.env.GITHAIKU_RATE_LIMIT_MAX_BUCKETS = '5';
 
 const { buildServer } = await import('../src/server');
 const { createOwner } = await import('../src/store');
-const { resetHaikuRateLimits } = await import('../src/rate-limit');
+const {
+  consumeInvalidHaikuAttempt,
+  consumeMatchedOwnerHaikuAttempt,
+  getHaikuRateLimitStateForTests,
+  resetHaikuRateLimits,
+} = await import('../src/rate-limit');
 
 const app = await buildServer();
 let code: string;
@@ -30,6 +37,10 @@ afterAll(async () => {
 beforeEach(() => {
   resetHaikuRateLimits();
 });
+
+function requestFrom(ip: string): FastifyRequest {
+  return { ip } as FastifyRequest;
+}
 
 describe('rate limiting on /api/haiku', () => {
   it('429s after the matched owner limit is exceeded', async () => {
@@ -63,5 +74,44 @@ describe('rate limiting on /api/haiku', () => {
     expect(res.statusCode).toBe(429);
     expect(JSON.parse(res.body)).toEqual({ allowed: false, reason: 'rate limited' });
     expect(res.headers['retry-after']).toBeDefined();
+  });
+
+  it('evicts expired limiter buckets on access after the rate window passes', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+      consumeInvalidHaikuAttempt(requestFrom('203.0.113.10'), 'wrong-one');
+      consumeMatchedOwnerHaikuAttempt(requestFrom('203.0.113.10'), 'owner-one');
+      expect(getHaikuRateLimitStateForTests()).toMatchObject({
+        invalidIpBuckets: 1,
+        invalidCodeBuckets: 1,
+        matchedOwnerBuckets: 1,
+      });
+
+      vi.advanceTimersByTime(60_001);
+      consumeInvalidHaikuAttempt(requestFrom('203.0.113.11'), 'wrong-two');
+      consumeMatchedOwnerHaikuAttempt(requestFrom('203.0.113.11'), 'owner-two');
+
+      expect(getHaikuRateLimitStateForTests()).toMatchObject({
+        invalidIpBuckets: 1,
+        invalidCodeBuckets: 1,
+        matchedOwnerBuckets: 1,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps limiter bucket maps bounded under many distinct keys', () => {
+    for (let i = 0; i < 50; i++) {
+      consumeInvalidHaikuAttempt(requestFrom(`198.51.${i}.10`), `wrong-${i}`);
+      consumeMatchedOwnerHaikuAttempt(requestFrom(`203.0.${i}.10`), `owner-${i}`);
+    }
+
+    const state = getHaikuRateLimitStateForTests();
+    expect(state.maxBuckets).toBe(5);
+    expect(state.invalidIpBuckets).toBeLessThanOrEqual(state.maxBuckets);
+    expect(state.invalidCodeBuckets).toBeLessThanOrEqual(state.maxBuckets);
+    expect(state.matchedOwnerBuckets).toBeLessThanOrEqual(state.maxBuckets);
   });
 });

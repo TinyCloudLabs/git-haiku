@@ -37,7 +37,14 @@ export interface AuditEntry {
 const KV_PREFIX = 'audit/';
 const FILE_PATH = join(config.dataDir, 'audit.log.jsonl');
 const INVALID_AUDIT_WINDOW_MS = Number(process.env['GITHAIKU_INVALID_AUDIT_WINDOW_MS'] ?? 60_000);
-const invalidAuditWindows = new Set<string>();
+const INVALID_AUDIT_MAX_WINDOWS = parsePositiveInt(process.env['GITHAIKU_INVALID_AUDIT_MAX_WINDOWS'], 20_000);
+const invalidAuditWindows = new Map<string, number>();
+
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  if (Number.isInteger(parsed) && parsed > 0) return parsed;
+  return fallback;
+}
 
 /**
  * Derive a stable, non-reversible id for a code so the audit log can group
@@ -65,6 +72,28 @@ export function invalidAuditCodeId(ip: string, at = new Date()): string {
     .digest('hex')
     .slice(0, 16);
   return `invalid:${digest}`;
+}
+
+function sweepInvalidAuditWindows(now: number): void {
+  for (const [key, expiresAt] of invalidAuditWindows) {
+    if (expiresAt <= now) {
+      invalidAuditWindows.delete(key);
+    }
+  }
+}
+
+function enforceInvalidAuditWindowCap(): void {
+  while (invalidAuditWindows.size > INVALID_AUDIT_MAX_WINDOWS) {
+    const oldest = invalidAuditWindows.keys().next().value;
+    if (oldest === undefined) return;
+    invalidAuditWindows.delete(oldest);
+  }
+}
+
+function rememberInvalidAuditWindow(key: string, expiresAt: number): void {
+  invalidAuditWindows.delete(key);
+  invalidAuditWindows.set(key, expiresAt);
+  enforceInvalidAuditWindowCap();
 }
 
 function useKv(): boolean {
@@ -130,10 +159,16 @@ export async function recordAudit(input: {
 
 export async function recordInvalidCodeAudit(input: { ip: string; at?: Date }): Promise<void> {
   const at = input.at ?? new Date();
+  const atMs = at.getTime();
   const codeId = invalidAuditCodeId(input.ip, at);
-  const windowKey = `${codeId}:${Math.floor(at.getTime() / INVALID_AUDIT_WINDOW_MS)}`;
-  if (invalidAuditWindows.has(windowKey)) return;
-  invalidAuditWindows.add(windowKey);
+  const windowStart = Math.floor(atMs / INVALID_AUDIT_WINDOW_MS) * INVALID_AUDIT_WINDOW_MS;
+  const windowKey = `${codeId}:${Math.floor(atMs / INVALID_AUDIT_WINDOW_MS)}`;
+  sweepInvalidAuditWindows(atMs);
+  if (invalidAuditWindows.has(windowKey)) {
+    rememberInvalidAuditWindow(windowKey, windowStart + INVALID_AUDIT_WINDOW_MS);
+    return;
+  }
+  rememberInvalidAuditWindow(windowKey, windowStart + INVALID_AUDIT_WINDOW_MS);
 
   await recordEntry({
     codeId,
@@ -196,4 +231,9 @@ function parseEntry(raw: unknown): AuditEntry | null {
 /** Reset invalid-attempt coalescing state (tests only). */
 export function resetAuditCoalescing(): void {
   invalidAuditWindows.clear();
+}
+
+/** Snapshot invalid-audit coalescing state (tests only). */
+export function getInvalidAuditCoalescingStateForTests(): { windows: number; maxWindows: number } {
+  return { windows: invalidAuditWindows.size, maxWindows: INVALID_AUDIT_MAX_WINDOWS };
 }
