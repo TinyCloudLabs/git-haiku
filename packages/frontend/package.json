@@ -1,0 +1,33 @@
+{
+  "name": "@githaiku/frontend",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@openkey/sdk": "^0.8.4",
+    "@tinycloud/sdk-core": "2.3.0",
+    "@tinycloud/web-sdk": "2.3.1-beta.0",
+    "@tinycloud/web-sdk-wasm": "1.7.4",
+    "ethers": "^5.7.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "viem": "^2.45.0"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.1.0",
+    "@testing-library/user-event": "^14.5.2",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "jsdom": "^25.0.1",
+    "vite": "^5.4.11",
+    "vite-plugin-node-polyfills": "^0.28.0",
+    "vitest": "^2.0.0"
+  }
+}

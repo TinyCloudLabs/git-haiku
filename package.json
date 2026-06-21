@@ -1,0 +1,26 @@
+{
+  "name": "git-haiku",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@9.12.3",
+  "scripts": {
+    "dev": "portless",
+    "dev:plain": "GITHAIKU_BACKEND_URL=http://127.0.0.1:8787 concurrently -n backend,frontend -c green,cyan \"pnpm --filter @githaiku/backend dev\" \"pnpm --filter @githaiku/frontend dev\"",
+    "seed": "pnpm --filter @githaiku/backend seed",
+    "build": "pnpm -r --if-present build",
+    "build:frontend": "pnpm --filter @githaiku/frontend build",
+    "deploy:cf": "pnpm build:frontend && wrangler pages deploy packages/frontend/dist --project-name git-haiku",
+    "lint": "pnpm -r --if-present lint",
+    "test": "pnpm -r --if-present test",
+    "docker:build": "docker buildx build --platform linux/amd64 -t ${GITHAIKU_BACKEND_IMAGE:-ghcr.io/tinycloudlabs/githaiku-backend:latest} .",
+    "docker:push": "docker push ${GITHAIKU_BACKEND_IMAGE:-ghcr.io/tinycloudlabs/githaiku-backend:latest}",
+    "deploy:phala": "phala deploy -c docker-compose.phala.yml -e .env.prod --wait"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "concurrently": "^9.1.0",
+    "typescript": "^5.0.0",
+    "vitest": "^2.0.0"
+  }
+}
+

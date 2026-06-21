@@ -1,0 +1,7 @@
+.passkey.json
+.passkey.old.json
+.last-run.log
+*.log
+node_modules/
+bun.lock
+bun.lockb

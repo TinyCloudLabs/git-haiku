@@ -1,0 +1,52 @@
+services:
+  githaiku-backend:
+    image: ${GITHAIKU_BACKEND_IMAGE:-ghcr.io/tinycloudlabs/githaiku-backend:latest}
+    platform: linux/amd64
+    ports:
+      - "8787:8787"
+    environment:
+      NODE_ENV: production
+      PORT: "8787"
+      HOST: "0.0.0.0"
+      # In-TEE: derive the backend key + produce real attestation via the dstack
+      # socket. GITHAIKU_BACKEND_PRIVATE_KEY is intentionally NOT set here — the
+      # key is derived inside the enclave and never leaves it.
+      GITHAIKU_TEE: "1"
+      GITHAIKU_SECRETS_PROVIDER: "tc-cli"
+      GITHAIKU_NODE_HOST: ${GITHAIKU_NODE_HOST:-https://tee.node.tinycloud.xyz}
+      GITHAIKU_PUBLIC_URL: ${GITHAIKU_PUBLIC_URL:-https://api.githaiku.com}
+      GITHAIKU_ALLOWED_ORIGINS: ${GITHAIKU_ALLOWED_ORIGINS:-https://githaiku.com,https://www.githaiku.com}
+      # RedPill confidential LLM key — dstack ENCRYPTED env (via `phala deploy -e`),
+      # never baked into the image. Empty default => deterministic fallback.
+      REDPILL_API_KEY: ${REDPILL_API_KEY:-}
+      REDPILL_BASE_URL: ${REDPILL_BASE_URL:-https://api.redpill.ai/v1}
+      REDPILL_MODEL: ${REDPILL_MODEL:-phala/deepseek-v4-flash}
+      # Rate-limit knobs for /api/haiku (brute-force protection).
+      GITHAIKU_HAIKU_RATE_MAX: ${GITHAIKU_HAIKU_RATE_MAX:-20}
+      GITHAIKU_HAIKU_RATE_WINDOW: ${GITHAIKU_HAIKU_RATE_WINDOW:-1 minute}
+    volumes:
+      # Required for dstack key derivation + TDX attestation.
+      - /var/run/dstack.sock:/var/run/dstack.sock:ro
+    restart: unless-stopped
+
+  dstack-ingress:
+    image: ${GITHAIKU_INGRESS_IMAGE:-ghcr.io/tinycloudlabs/githaiku-backend:ingress-latest}
+    ports:
+      - "443:443"
+    depends_on:
+      - githaiku-backend
+    environment:
+      DOMAIN: ${PHALA_INGRESS_DOMAIN:-api.githaiku.com}
+      TARGET_ENDPOINT: http://githaiku-backend:8787
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN}
+      GATEWAY_DOMAIN: ${PHALA_GATEWAY_CNAME}
+      CERTBOT_EMAIL: ${CERTBOT_EMAIL}
+      SET_CAA: "true"
+      DNS_PROVIDER: cloudflare
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock
+      - cert-data:/etc/letsencrypt
+    restart: unless-stopped
+
+volumes:
+  cert-data:

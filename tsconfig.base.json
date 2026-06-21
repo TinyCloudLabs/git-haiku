@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "useUnknownInCatchVariables": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "baseUrl": ".",
+    "paths": {
+      "@githaiku/shared": ["packages/shared/src/index.ts"],
+      "@githaiku/shared/*": ["packages/shared/src/*"],
+      "@githaiku/backend": ["packages/backend/src/index.ts"],
+      "@githaiku/backend/*": ["packages/backend/src/*"],
+      "@githaiku/frontend": ["packages/frontend/src/index.ts"],
+      "@githaiku/frontend/*": ["packages/frontend/src/*"]
+    }
+  }
+}
+

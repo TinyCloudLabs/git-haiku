@@ -1,0 +1,18 @@
+.git
+node_modules
+**/node_modules
+dist
+**/dist
+.turbo
+.vite
+.smithers
+coverage
+.DS_Store
+# NEVER ship dev secrets into the image build context.
+.githaiku-dev
+**/.githaiku-dev
+*.env
+.env
+.env.*
+# The frontend is a separate deploy target.
+packages/frontend
