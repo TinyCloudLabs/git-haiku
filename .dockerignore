@@ -14,5 +14,8 @@ coverage
 *.env
 .env
 .env.*
-# The frontend is a separate deploy target.
+# The frontend is a separate deploy target: keep it out of the backend image
+# context, but re-include its package.json so the pnpm --frozen-lockfile
+# workspace validation in the Dockerfile can resolve all workspace manifests.
 packages/frontend
+!packages/frontend/package.json
