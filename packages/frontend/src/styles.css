@@ -290,6 +290,37 @@ body {
   font-size: 12px;
 }
 
+/* ── github token help ───────────────────────────────────────────── */
+.token-help {
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.token-help-line {
+  margin: 0;
+}
+.token-help a {
+  color: var(--moss-dark);
+}
+.token-help-details {
+  margin-top: 8px;
+}
+.token-help-details summary {
+  cursor: pointer;
+  color: var(--moss-dark);
+  font-weight: 600;
+}
+.token-help-details ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+.token-help-details li {
+  margin-bottom: 8px;
+}
+.token-help-details code {
+  font-size: 12px;
+}
+
 /* ── tables (codes + audit) ──────────────────────────────────────── */
 .table {
   width: 100%;
