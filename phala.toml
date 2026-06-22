@@ -1,7 +1,9 @@
-name = "githaiku-backend"
+name = "git-haiku"
 profile = "tinycloudxyz"
 compose_file = "docker-compose.phala.yml"
+cvm_id = "a45a1599-c046-4826-8e41-f810fd952282"
+app_id = "eea9d38800d1444fcff3463cd96ec0ceda5961a1"
 gateway_domain = "api.githaiku.com"
 gateway_port = 8787
-public_logs = false
+public_logs = true
 public_sysinfo = true
