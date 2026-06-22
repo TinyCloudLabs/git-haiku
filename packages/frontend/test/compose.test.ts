@@ -41,6 +41,10 @@ const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
 describe('composeOwnerRequest', () => {
   const composed = composeOwnerRequest(SERVER_INFO, OWNER_DID);
 
+  it('uses the com.githaiku reverse-DNS app_id', () => {
+    expect(APP_MANIFEST.app_id).toBe('com.githaiku');
+  });
+
   it('grants the owner app the valid secret write action needed by secrets.put', () => {
     expect(APP_MANIFEST.secrets?.GITHUB_TOKEN).toEqual(expect.arrayContaining(['read', 'write']));
   });

@@ -19,7 +19,7 @@ import type { Manifest } from '@tinycloud/web-sdk';
  */
 export const APP_MANIFEST: Manifest = {
   manifest_version: 1,
-  app_id: 'xyz.tinycloud.githaiku',
+  app_id: 'com.githaiku',
   name: 'Git Haiku',
   description: 'Verifiable haiku from your recent commit messages, generated inside an attested TEE.',
   defaults: true,
