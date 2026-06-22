@@ -95,6 +95,11 @@ export async function createAndSignIn(
     tinycloudHosts: TINYCLOUD_HOSTS,
     autoCreateSpace: true,
     sessionStorage: new BrowserSessionStorage(),
+    // `capabilityRequest` drives the SIWE recap, but secrets.put's
+    // escalation/requestPermissions path needs the app manifest STORED on the
+    // instance — so pass it explicitly (capabilityRequest still takes precedence
+    // for sign-in; manifest is forwarded to the underlying TinyCloudNode).
+    manifest: APP_MANIFEST,
     capabilityRequest: composedRequest,
   });
   // Some SDK signing paths still read the provider property directly.
@@ -137,6 +142,9 @@ export async function restoreSession(address: string): Promise<TinyCloudWeb | nu
     tinycloudHosts: TINYCLOUD_HOSTS,
     autoCreateSpace: false,
     sessionStorage: new BrowserSessionStorage(),
+    // secrets.put can run on a restored session, which also needs the stored
+    // manifest for its escalation/requestPermissions path.
+    manifest: APP_MANIFEST,
   });
   const restored = await tcw.restoreSession(address);
   if (restored.status !== 'restored' || !restored.session) return null;
