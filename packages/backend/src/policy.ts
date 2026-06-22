@@ -3,8 +3,10 @@
  *
  * The backend advertises exactly the permissions an owner must delegate so the
  * backend can read the owner's secret(s) from TinyCloud Secrets:
- *  - per-secret KV `get` on `vault/secrets/<NAME>` in the owner's `secrets`
- *    space (skipPrefix: true), and
+ *  - per-secret KV `get` on the SCOPED vault path
+ *    `vault/secrets/scoped/githaiku/<NAME>` in the owner's `secrets` space
+ *    (skipPrefix: true), derived via the SDK's `resolveSecretPath` so it
+ *    provably matches the frontend manifest resolution, and
  *  - `decrypt` on the owner's default encryption network.
  *
  * The owner delegates exactly ONE secret: GITHUB_TOKEN (their private data). The
@@ -15,9 +17,19 @@
  * Kept deliberately minimal — a hand-built array, no manifest resolution.
  */
 
+import { resolveSecretPath } from '@tinycloud/node-sdk';
+
 /** The secret(s) the backend reads under delegation. GITHUB_TOKEN only. */
 export const SECRET_NAMES = ['GITHUB_TOKEN'] as const;
 export type SecretName = (typeof SECRET_NAMES)[number];
+
+/**
+ * The single secret scope namespacing this app's secrets. Canonical (===
+ * `canonicalizeSecretScope('githaiku')`). Shared by the KV-get path the backend
+ * advertises AND the `tc secrets get --scope` read, and matches the frontend
+ * manifest's `secrets.GITHUB_TOKEN.scope`.
+ */
+export const GITHUB_TOKEN_SCOPE = 'githaiku';
 
 export interface PermissionEntry {
   service: string;
@@ -28,9 +40,13 @@ export interface PermissionEntry {
   description?: string;
 }
 
-/** The owner's secret lives at this KV path in their `secrets` space. */
+/**
+ * The owner's secret lives at this SCOPED vault path in their `secrets` space.
+ * Derived via the SDK so it matches the frontend manifest resolution exactly:
+ * `vault/secrets/scoped/githaiku/<NAME>`.
+ */
 export function secretVaultPath(name: SecretName): string {
-  return `vault/secrets/${name}`;
+  return resolveSecretPath(name, { scope: GITHUB_TOKEN_SCOPE }).permissionPaths.vault;
 }
 
 /** did:pkh for an owner Ethereum address (mainnet by default). */

@@ -93,7 +93,7 @@ export function validateDelegation(serialized: string, expectedBackendDid: strin
 
   for (const name of SECRET_NAMES) {
     if (!coversSecretPath(resources, secretVaultPath(name))) {
-      throw new Error(`delegation does not cover KV get on vault/secrets/${name}`);
+      throw new Error(`delegation does not cover KV get on ${secretVaultPath(name)}`);
     }
   }
   if (!coversDecrypt(resources)) {

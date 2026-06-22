@@ -3,11 +3,13 @@
  *
  * GATED: only runs with GITHAIKU_LIVE=1 (never in the default headless test
  * run). NOT mocked — stands up a real local tinycloud-node, uses a real OWNER
- * identity to put GITHUB_TOKEN (the owner's only delegated secret), delegates
- * KV-get + decrypt to the BACKEND's stable did:pkh (audience = pkh, the proven
- * fix), delivers the delegation to the backend (POST /api/delegations), and
- * triggers the haiku flow so the backend reads GITHUB_TOKEN via the REAL `tc`
- * CLI. The RedPill LLM key is backend config, NOT an owner secret.
+ * identity to put GITHUB_TOKEN under the `githaiku` scope (the owner's only
+ * delegated secret), delegates KV-get on the scoped vault path
+ * (vault/secrets/scoped/githaiku/GITHUB_TOKEN) + decrypt to the BACKEND's stable
+ * did:pkh (audience = pkh, the proven fix), delivers the delegation to the
+ * backend (POST /api/delegations), and triggers the haiku flow so the backend
+ * reads GITHUB_TOKEN via the REAL `tc … --scope githaiku` CLI. The RedPill LLM
+ * key is backend config, NOT an owner secret.
  *
  *   GITHAIKU_LIVE=1 pnpm --filter @githaiku/backend tsx test/live-delegated-secrets.ts
  *
@@ -22,9 +24,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  resolveSecretPath,
   serializeDelegation,
   TinyCloudNode,
 } from '@tinycloud/node-sdk';
+
+import { GITHUB_TOKEN_SCOPE } from '../src/policy';
+
+// The scoped vault path the owner delegates KV-get on and the backend reads.
+const GITHUB_TOKEN_VAULT_PATH = resolveSecretPath('GITHUB_TOKEN', {
+  scope: GITHUB_TOKEN_SCOPE,
+}).permissionPaths.vault;
 
 const NODE_BIN =
   process.env['GITHAIKU_NODE_BIN'] ??
@@ -136,11 +146,13 @@ async function main(): Promise<void> {
     log(`owner encryption network: ${network.networkId}`);
 
     {
-      const put = await owner.secrets.put('GITHUB_TOKEN', GITHUB_TOKEN);
+      const put = await owner.secrets.put('GITHUB_TOKEN', GITHUB_TOKEN, {
+        scope: GITHUB_TOKEN_SCOPE,
+      });
       if (!put.ok) {
         throw new Error(`owner secrets.put(GITHUB_TOKEN) failed: ${put.error.code} ${put.error.message}`);
       }
-      log('owner put secret GITHUB_TOKEN');
+      log(`owner put secret GITHUB_TOKEN (scope=${GITHUB_TOKEN_SCOPE}, path=${GITHUB_TOKEN_VAULT_PATH})`);
     }
 
     // One multi-resource delegation: KV-get on GITHUB_TOKEN + decrypt. Audience
@@ -150,7 +162,7 @@ async function main(): Promise<void> {
       {
         service: 'tinycloud.kv',
         space: 'secrets',
-        path: 'vault/secrets/GITHUB_TOKEN',
+        path: GITHUB_TOKEN_VAULT_PATH,
         actions: ['tinycloud.kv/get'],
       },
       {
