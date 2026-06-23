@@ -154,6 +154,11 @@ export async function createAndSignIn(
  * backend reads.
  */
 export async function putGithubToken(tcw: TinyCloudWeb, token: string): Promise<void> {
+  // A manifest-recap sign-in does NOT auto-host the owner's `secrets` owned-space
+  // (the SDK only auto-hosts it when neither manifest nor capabilityRequest is
+  // set). Host it explicitly via the public API (idempotent, recap-authorized —
+  // no extra prompt) so the first scoped put doesn't 404 "Space not found".
+  await tcw.ensureOwnedSpaceHosted('secrets');
   // `secrets.put` seals the payload via the owner's default encryption network
   // (`encryptToNetwork`), which requires the network to exist — it is NOT
   // auto-created by `put`. Create-or-fetch it first (the recap grants
