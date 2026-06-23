@@ -18,9 +18,26 @@ export const BACKEND_URL: string = (import.meta.env.VITE_BACKEND_URL ?? '').repl
 /** OpenKey instance the owner authenticates against. */
 export const OPENKEY_HOST: string = import.meta.env.VITE_OPENKEY_HOST ?? 'https://openkey.so';
 
-/** Optional explicit TinyCloud node host(s) for the owner's web-sdk session. */
+/**
+ * The TinyCloud node host(s) for the owner's web-sdk session.
+ *
+ * MUST always be set. The web-sdk's `signIn()` first attempts an internal
+ * `restoreSession()` from BrowserSessionStorage and, when a persisted session
+ * exists, returns it WITHOUT running the wallet sign-in flow that resolves hosts
+ * via the registry (`resolveTinyCloudHostsForSignIn`). On that restore path the
+ * node's `tinycloudHosts` is left empty, so the first post-sign-in service call
+ * (`ensureOwnedSpaceHosted('secrets')`) throws "TinyCloud hosts have not been
+ * resolved. Call signIn() first." Passing `tinycloudHosts` at construction makes
+ * `requireTinyCloudHosts()` satisfied on BOTH the fresh-sign-in and the internal
+ * restore paths, so secrets/space/encryption calls work regardless of whether
+ * the SDK signed in fresh or restored.
+ *
+ * Defaults to the public TinyCloud node (matching the backend's
+ * `GITHAIKU_NODE_HOST` default); override with `VITE_TINYCLOUD_HOST` for
+ * self-hosted/staging nodes.
+ */
 const TINYCLOUD_HOST = import.meta.env.VITE_TINYCLOUD_HOST as string | undefined;
-export const TINYCLOUD_HOSTS: string[] | undefined = TINYCLOUD_HOST ? [TINYCLOUD_HOST] : undefined;
+export const TINYCLOUD_HOSTS: string[] = [TINYCLOUD_HOST ?? 'https://node.tinycloud.xyz'];
 
 /** App display name shown in the OpenKey passkey prompt. */
 export const APP_NAME = 'Git Haiku';

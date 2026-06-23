@@ -36,7 +36,7 @@ export async function signInOwner(): Promise<OwnerSession> {
   const info = await getServerInfo();
   const composedRequest = composeOwnerRequest(info, openkey.did);
 
-  const tcw = await createAndSignIn(openkey.web3Provider, composedRequest);
+  const tcw = await createAndSignIn(openkey.web3Provider, composedRequest, openkey.address);
 
   const auth: OwnerAuthContext = {
     address: openkey.address,
