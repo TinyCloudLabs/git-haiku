@@ -2,6 +2,18 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@tinycloud/node-sdk', () => ({
   deserializeDelegation: (serialized: string) => JSON.parse(serialized),
+  // policy.ts derives the scoped vault path via resolveSecretPath. Mirror the
+  // real SDK output for the githaiku scope so coverage checks the scoped path.
+  resolveSecretPath: (name: string, options?: { scope?: string }) => ({
+    name,
+    ...(options?.scope ? { scope: options.scope } : {}),
+    vaultKey: options?.scope ? `secrets/scoped/${options.scope}/${name}` : `secrets/${name}`,
+    permissionPaths: {
+      vault: options?.scope
+        ? `vault/secrets/scoped/${options.scope}/${name}`
+        : `vault/secrets/${name}`,
+    },
+  }),
 }));
 
 const { validateDelegation } = await import('../src/delegations');
@@ -17,7 +29,7 @@ function validDelegation(overrides: Record<string, unknown> = {}): string {
       {
         service: 'tinycloud.kv',
         space: 'secrets',
-        path: 'vault/secrets/GITHUB_TOKEN',
+        path: 'vault/secrets/scoped/githaiku/GITHUB_TOKEN',
         actions: ['tinycloud.kv/get'],
       },
       {

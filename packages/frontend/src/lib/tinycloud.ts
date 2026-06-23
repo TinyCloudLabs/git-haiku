@@ -8,7 +8,7 @@ import {
 } from '@tinycloud/web-sdk';
 import type { providers } from 'ethers';
 
-import { APP_MANIFEST } from './appManifest';
+import { APP_MANIFEST, GITHUB_TOKEN_SCOPE } from './appManifest';
 import { TINYCLOUD_HOSTS } from './config';
 import type { ServerInfo, ServerInfoPermission } from '../api';
 
@@ -95,6 +95,11 @@ export async function createAndSignIn(
     tinycloudHosts: TINYCLOUD_HOSTS,
     autoCreateSpace: true,
     sessionStorage: new BrowserSessionStorage(),
+    // `capabilityRequest` drives the SIWE recap, but secrets.put's
+    // escalation/requestPermissions path needs the app manifest STORED on the
+    // instance — so pass it explicitly (capabilityRequest still takes precedence
+    // for sign-in; manifest is forwarded to the underlying TinyCloudNode).
+    manifest: APP_MANIFEST,
     capabilityRequest: composedRequest,
   });
   // Some SDK signing paths still read the provider property directly.
@@ -104,11 +109,13 @@ export async function createAndSignIn(
 }
 
 /**
- * Write the owner's GitHub token into their TinyCloud Secrets vault
- * (`vault/secrets/GITHUB_TOKEN`, encrypted via their default network).
+ * Write the owner's GitHub token into their TinyCloud Secrets vault under the
+ * `githaiku` scope (`vault/secrets/scoped/githaiku/GITHUB_TOKEN`, encrypted via
+ * their default network). Matches the scoped path the manifest declares + the
+ * backend reads.
  */
 export async function putGithubToken(tcw: TinyCloudWeb, token: string): Promise<void> {
-  const result = await tcw.secrets.put('GITHUB_TOKEN', token);
+  const result = await tcw.secrets.put('GITHUB_TOKEN', token, { scope: GITHUB_TOKEN_SCOPE });
   if (!result.ok) {
     throw new Error(result.error?.message ?? 'secrets.put failed');
   }
@@ -116,7 +123,8 @@ export async function putGithubToken(tcw: TinyCloudWeb, token: string): Promise<
 
 /**
  * Materialize the backend's manifest-declared delegation (KV-get on
- * vault/secrets/GITHUB_TOKEN + decrypt) and serialize it for POST. The owner's
+ * vault/secrets/scoped/githaiku/GITHUB_TOKEN + decrypt) and serialize it for
+ * POST. The owner's
  * signed recap already covers these caps, so no extra prompt.
  */
 export async function materializeBackendDelegation(
@@ -137,6 +145,9 @@ export async function restoreSession(address: string): Promise<TinyCloudWeb | nu
     tinycloudHosts: TINYCLOUD_HOSTS,
     autoCreateSpace: false,
     sessionStorage: new BrowserSessionStorage(),
+    // secrets.put can run on a restored session, which also needs the stored
+    // manifest for its escalation/requestPermissions path.
+    manifest: APP_MANIFEST,
   });
   const restored = await tcw.restoreSession(address);
   if (restored.status !== 'restored' || !restored.session) return null;

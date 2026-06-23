@@ -30,7 +30,9 @@ services:
     restart: unless-stopped
 
   dstack-ingress:
-    image: ${GITHAIKU_INGRESS_IMAGE:-ghcr.io/tinycloudlabs/githaiku-backend:ingress-latest}
+    # Canonical Phala dstack-ingress (auto TLS via Let's Encrypt + Cloudflare DNS),
+    # pinned by digest so the attested compose-hash is reproducible.
+    image: ${GITHAIKU_INGRESS_IMAGE:-dstacktee/dstack-ingress:20250924@sha256:40429d78060ef3066b5f93676bf3ba7c2e9ac47d4648440febfdda558aed4b32}
     ports:
       - "443:443"
     depends_on:
@@ -39,7 +41,9 @@ services:
       DOMAIN: ${PHALA_INGRESS_DOMAIN:-api.githaiku.com}
       TARGET_ENDPOINT: http://githaiku-backend:8787
       CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN}
-      GATEWAY_DOMAIN: ${PHALA_GATEWAY_CNAME}
+      # dstack injects DSTACK_GATEWAY_DOMAIN at runtime; the ingress points the
+      # custom domain's CNAME at the CVM's gateway automatically (no manual paste).
+      GATEWAY_DOMAIN: _.${DSTACK_GATEWAY_DOMAIN}
       CERTBOT_EMAIL: ${CERTBOT_EMAIL}
       SET_CAA: "true"
       DNS_PROVIDER: cloudflare

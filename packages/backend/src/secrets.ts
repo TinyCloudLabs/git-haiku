@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 import { config } from './config';
 import { loadDelegation } from './delegation-store';
 import { getBackendIdentity } from './identity';
-import { SECRET_NAMES, type SecretName } from './policy';
+import { GITHUB_TOKEN_SCOPE, SECRET_NAMES, type SecretName } from './policy';
 import type { OwnerRecord } from './store';
 
 const execFileAsync = promisify(execFile);
@@ -20,8 +20,9 @@ const execFileAsync = promisify(execFile);
  *   dev store. No TinyCloud node needed.
  * - TC-CLI: the real trust contract. The owner's GITHUB_TOKEN lives in TinyCloud
  *   Secrets; the backend reads it under the owner's delegation by invoking the
- *   real `tc` binary (`tc secrets get <NAME> --delegation <file> --host <node>
- *   --json`). Secrets stay in memory — never written to disk (except the
+ *   real `tc` binary (`tc secrets get <NAME> --scope githaiku --delegation
+ *   <file> --host <node> --json`). Secrets stay in memory — never written to
+ *   disk (except the
  *   transient delegation file, deleted immediately) or logs.
  *
  * The RedPill LLM key is backend-global config (env), NOT an owner secret, so it
@@ -113,6 +114,11 @@ class TcCliSecretsProvider implements SecretsProvider {
         'secrets',
         'get',
         name,
+        // The secret is namespaced under the `githaiku` scope, resolving to
+        // vault/secrets/scoped/githaiku/<NAME> — the same path the owner
+        // delegated KV-get on (see policy.secretVaultPath).
+        '--scope',
+        GITHUB_TOKEN_SCOPE,
         '--delegation',
         delegationFile,
         '--host',

@@ -2,7 +2,7 @@
  * Marketing landing page. Explains what Git Haiku is, the trust contract, and
  * the "verifiable haiku from an attested TEE" pitch, with entry into the app.
  */
-export function Landing({ onEnter }: { onEnter: (view: 'requester' | 'owner') => void }) {
+export function Landing({ onEnter }: { onEnter: (view: 'requester' | 'owner' | 'safe') => void }) {
   return (
     <div className="landing">
       <section className="hero">
@@ -56,6 +56,11 @@ export function Landing({ onEnter }: { onEnter: (view: 'requester' | 'owner') =>
             title="Provable, not promised"
             body="Each haiku ships with a TEE attestation you can verify. The poem is the only thing that can come out, and you can prove it."
           />
+        </div>
+        <div className="hero-cta center">
+          <button className="ghost big" onClick={() => onEnter('safe')}>
+            How is this safe?
+          </button>
         </div>
       </section>
 

@@ -6,10 +6,14 @@ import type { ServerInfo } from '../src/api';
 
 /**
  * Verifies the composed capability request the owner signs carries the backend's
- * delegation target with: KV-get on the GITHUB_TOKEN vault path, a decrypt grant
- * bound to the OWNER's default encryption network (decryptDelegateDid = backend
- * did), and a ~90d expiry. Uses the REAL sdk-core compose — no mocks.
+ * delegation target with: KV-get on the SCOPED GITHUB_TOKEN vault path
+ * (vault/secrets/scoped/githaiku/GITHUB_TOKEN), a decrypt grant bound to the
+ * OWNER's default encryption network (decryptDelegateDid = backend did), and a
+ * ~90d expiry. Uses the REAL sdk-core compose — no mocks.
  */
+
+// The scoped vault path the manifest resolves to + the backend advertises.
+const GITHUB_TOKEN_VAULT_PATH = 'vault/secrets/scoped/githaiku/GITHUB_TOKEN';
 
 const OWNER_DID = 'did:pkh:eip155:1:0x1111111111111111111111111111111111111111';
 const BACKEND_DID = 'did:pkh:eip155:1:0x2222222222222222222222222222222222222222';
@@ -22,7 +26,7 @@ const SERVER_INFO: ServerInfo = {
     {
       service: 'tinycloud.kv',
       space: 'secrets',
-      path: 'vault/secrets/GITHUB_TOKEN',
+      path: GITHUB_TOKEN_VAULT_PATH,
       actions: ['get'],
       skipPrefix: true,
     },
@@ -41,8 +45,15 @@ const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
 describe('composeOwnerRequest', () => {
   const composed = composeOwnerRequest(SERVER_INFO, OWNER_DID);
 
-  it('grants the owner app the valid secret write action needed by secrets.put', () => {
-    expect(APP_MANIFEST.secrets?.GITHUB_TOKEN).toEqual(expect.arrayContaining(['read', 'write']));
+  it('uses the com.githaiku reverse-DNS app_id', () => {
+    expect(APP_MANIFEST.app_id).toBe('com.githaiku');
+  });
+
+  it('grants the owner app the valid secret write action needed by secrets.put, under the githaiku scope', () => {
+    expect(APP_MANIFEST.secrets?.GITHUB_TOKEN).toEqual({
+      actions: expect.arrayContaining(['read', 'write']),
+      scope: 'githaiku',
+    });
   });
 
   it('produces a delegation target for the backend DID', () => {
@@ -50,12 +61,14 @@ describe('composeOwnerRequest', () => {
     expect(target).toBeDefined();
   });
 
-  it('the target carries a KV-get on the GITHUB_TOKEN vault path', () => {
+  it('the target carries a KV-get on the SCOPED GITHUB_TOKEN vault path', () => {
     const target = composed.delegationTargets.find((t) => t.did === BACKEND_DID)!;
     const kv = target.permissions.find(
-      (p) => p.service === 'tinycloud.kv' && p.path.includes('vault/secrets/GITHUB_TOKEN'),
+      (p) => p.service === 'tinycloud.kv' && p.path.includes(GITHUB_TOKEN_VAULT_PATH),
     );
     expect(kv).toBeDefined();
+    // Provably the scoped path — never the unscoped global path.
+    expect(kv!.path).not.toMatch(/vault\/secrets\/GITHUB_TOKEN$/);
     expect(kv!.actions.map(String).join(',')).toContain('get');
     expect(kv!.actions.map(String).join(',')).not.toContain('put');
     expect(kv!.actions.map(String).join(',')).not.toContain('create');

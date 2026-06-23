@@ -172,6 +172,7 @@ function SetupPhase({
             onChange={(e) => setGithubToken(e.target.value)}
             placeholder="ghp_…"
           />
+          <TokenHelp />
         </label>
         <button className="primary" disabled={busy || !githubLogin.trim() || !githubToken.trim()}>
           {busy ? 'Working…' : 'Authorize & generate code'}
@@ -181,6 +182,54 @@ function SetupPhase({
       {status && <p className="muted status">{status}</p>}
       {error && <div className="denial">{error}</div>}
     </section>
+  );
+}
+
+// ── GitHub token help ─────────────────────────────────────────────────
+
+/**
+ * Inline help under the token input. Git Haiku reads ONLY commit metadata
+ * (messages, repo names, timestamps — never file contents/diffs), so the
+ * minimum grant is read-only. A token is optional for public repos only.
+ */
+function TokenHelp() {
+  return (
+    <div className="token-help muted">
+      <p className="token-help-line">
+        Create one:{' '}
+        <a
+          href="https://github.com/settings/personal-access-tokens/new"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          fine-grained token
+        </a>{' '}
+        (recommended) or{' '}
+        <a href="https://github.com/settings/tokens/new" target="_blank" rel="noopener noreferrer">
+          classic token
+        </a>
+        . Public repos only? A token is optional.
+      </p>
+      <details className="token-help-details">
+        <summary>What permissions?</summary>
+        <p>
+          Git Haiku reads <strong>only commit metadata</strong> — messages, repo names, timestamps.
+          Never file contents or diffs. Grant the minimum:
+        </p>
+        <ul>
+          <li>
+            <strong>Fine-grained (recommended):</strong> Repository access = the repos you want
+            summarized (or all). Permissions → <code className="mono">Contents: Read-only</code> and{' '}
+            <code className="mono">Metadata: Read-only</code> (Metadata is mandatory).
+          </li>
+          <li>
+            <strong>Classic (alt):</strong> <code className="mono">repo</code> scope for private
+            repos, or <code className="mono">public_repo</code> for public-only. Read access is all
+            that&apos;s used.
+          </li>
+        </ul>
+      </details>
+    </div>
   );
 }
 

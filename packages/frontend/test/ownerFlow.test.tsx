@@ -80,6 +80,15 @@ describe('OwnerFlow', () => {
     await screen.findByText(/what you're authorizing/i);
     expect(signInOwner).toHaveBeenCalledOnce();
 
+    // GitHub token help: link to create a fine-grained PAT + permissions hint.
+    const tokenLink = screen
+      .getAllByRole('link')
+      .find((a) => a.getAttribute('href') === 'https://github.com/settings/personal-access-tokens/new');
+    expect(tokenLink).toBeTruthy();
+    expect(tokenLink!.getAttribute('target')).toBe('_blank');
+    expect(tokenLink!.getAttribute('rel')).toBe('noopener noreferrer');
+    expect(screen.getByText(/what permissions\?/i)).toBeTruthy();
+
     await user.type(screen.getByPlaceholderText('octocat'), 'octocat');
     await user.type(screen.getByPlaceholderText('ghp_…'), 'ghp_secret_token');
     await user.click(screen.getByRole('button', { name: /authorize & generate code/i }));

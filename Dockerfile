@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.7
 #
 # Git Haiku backend image (TEE-deployable to Phala dstack).
 #
@@ -12,7 +11,7 @@
 #   docker buildx build --platform linux/amd64 -t githaiku-backend .
 
 # ---- build stage ---------------------------------------------------------
-FROM --platform=linux/amd64 node:20-slim AS build
+FROM --platform=linux/amd64 public.ecr.aws/docker/library/node:20-slim AS build
 WORKDIR /app
 
 ENV PNPM_HOME=/pnpm
@@ -40,7 +39,7 @@ FROM build AS prod-deps
 RUN pnpm --filter @githaiku/backend deploy --prod /runtime
 
 # ---- runtime stage -------------------------------------------------------
-FROM --platform=linux/amd64 node:20-slim AS runtime
+FROM --platform=linux/amd64 public.ecr.aws/docker/library/node:20-slim AS runtime
 WORKDIR /app
 
 ENV NODE_ENV=production
