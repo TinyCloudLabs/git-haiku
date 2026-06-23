@@ -300,8 +300,13 @@ export async function buildServer(): Promise<FastifyInstance> {
 
 // ── auth helpers ─────────────────────────────────────────────────────
 
-function corsOrigin(): true | string[] {
-  if (config.allowedOrigins.length > 0) return [...config.allowedOrigins];
+// The project's Cloudflare Pages domain: canonical `git-haiku.pages.dev` plus
+// per-deploy preview subdomains (`<hash>.git-haiku.pages.dev`). Always allowed
+// in addition to the configured exact origins (e.g. githaiku.com).
+const PAGES_DEV_ORIGIN = /^https:\/\/([a-z0-9-]+\.)?git-haiku\.pages\.dev$/;
+
+function corsOrigin(): true | (string | RegExp)[] {
+  if (config.allowedOrigins.length > 0) return [...config.allowedOrigins, PAGES_DEV_ORIGIN];
   if (process.env['NODE_ENV'] !== 'production' && process.env['GITHAIKU_TEE'] !== '1') return true;
   throw new Error('GITHAIKU_ALLOWED_ORIGINS is required in production/TEE mode');
 }
