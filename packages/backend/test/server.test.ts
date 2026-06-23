@@ -96,7 +96,7 @@ describe('POST /api/haiku', () => {
     expect(JSON.parse(res.body)).toEqual({ allowed: false, reason: 'invalid code' });
   });
 
-  it('returns non-2xx guarded JSON for operational failures', async () => {
+  it('returns a staged guarded denial for an upstream GitHub failure', async () => {
     const realFetch = global.fetch;
     global.fetch = (async () => new Response('upstream failed with commit secret', { status: 500 })) as typeof fetch;
     try {
@@ -105,9 +105,13 @@ describe('POST /api/haiku', () => {
         githubToken: 'ghp_test_operational_failure',
       }).secretCode;
       const res = await app.inject({ method: 'POST', url: '/api/haiku', payload: { code: failingCode } });
-      expect(res.statusCode).toBe(503);
-      expect(JSON.parse(res.body)).toEqual({ allowed: false, reason: 'internal error' });
-      expect(res.body).not.toContain('GitHub');
+      expect(res.statusCode).toBe(502);
+      const body = JSON.parse(res.body);
+      // Staged, still-safe denial: generic reason + the `github` stage, no data.
+      expect(body).toEqual({ allowed: false, reason: 'could not read your GitHub activity', stage: 'github' });
+      expect(body).not.toHaveProperty('haiku');
+      expect(body).not.toHaveProperty('commits');
+      // Nothing leaks: no upstream body, no token, no commit content.
       expect(res.body).not.toContain('commit secret');
       expect(res.body).not.toContain('ghp_test_operational_failure');
     } finally {
@@ -264,6 +268,73 @@ describe('audit log', () => {
     expect(latest.codeId).toMatch(/^invalid:[0-9a-f]{16}$/);
     expect(latest.codeId).not.toBe(codeIdFor('guess-one'));
     expect(latest.codeId).not.toBe(codeIdFor('guess-two'));
+  });
+});
+
+describe('POST /api/preview (owner-authed full-pipeline preview)', () => {
+  // A valid GitHub events fixture so a token-bearing owner's preview succeeds.
+  const eventsFixture = JSON.stringify([
+    {
+      type: 'PushEvent',
+      created_at: new Date().toISOString(),
+      repo: { name: 'octocat/hello' },
+      payload: { commits: [{ message: 'feat: preview pipeline' }] },
+    },
+  ]);
+
+  it('rejects an unauthenticated preview with 401', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/preview' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('returns 404 (no_owner) when the authed address has no owner record', async () => {
+    // Wallet 6 has not created an owner yet.
+    const res = await app.inject({ method: 'POST', url: '/api/preview', headers: await authHeaders(6) });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('returns a guarded 3-line haiku for the authenticated owner (full pipeline)', async () => {
+    // Wallet 6: token-bearing owner so preview runs the real fetch path (mocked).
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/owner',
+      headers: await authHeaders(6),
+      payload: { githubLogin: 'octocat', githubToken: 'ghp_preview_success' },
+    });
+    expect(created.statusCode).toBe(201);
+
+    const realFetch = global.fetch;
+    global.fetch = (async () => new Response(eventsFixture, { status: 200 })) as typeof fetch;
+    try {
+      const res = await app.inject({ method: 'POST', url: '/api/preview', headers: await authHeaders(6) });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.allowed).toBe(true);
+      expect(body.haiku.lines).toHaveLength(3);
+      expect(body.proof.policy_id).toBe(EGRESS_POLICY_ID);
+      // No commit data leaks via the preview.
+      expect(body).not.toHaveProperty('commits');
+      expect(JSON.stringify(body)).not.toContain('feat:');
+      expect(res.body).not.toContain('ghp_preview_success');
+    } finally {
+      global.fetch = realFetch;
+    }
+  });
+
+  it('returns a staged guarded denial (github) when a pipeline stage fails, no leak', async () => {
+    // Same wallet-6 token owner; force the GitHub fetch to fail -> github stage.
+    const realFetch = global.fetch;
+    global.fetch = (async () => new Response('upstream leaked commit content', { status: 500 })) as typeof fetch;
+    try {
+      const res = await app.inject({ method: 'POST', url: '/api/preview', headers: await authHeaders(6) });
+      expect(res.statusCode).toBe(502);
+      const body = JSON.parse(res.body);
+      expect(body).toEqual({ allowed: false, reason: 'could not read your GitHub activity', stage: 'github' });
+      expect(res.body).not.toContain('leaked commit content');
+      expect(res.body).not.toContain('ghp_preview_success');
+    } finally {
+      global.fetch = realFetch;
+    }
   });
 });
 

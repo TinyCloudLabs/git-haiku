@@ -1,9 +1,5 @@
 import cors from '@fastify/cors';
-import {
-  type EgressPayload,
-  guardOutboundPayload,
-  serializeGuardedResponse,
-} from '@githaiku/shared';
+import { type EgressPayload, serializeGuardedResponse } from '@githaiku/shared';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 
 import { getAttestation, verifyTeeStartup } from './attestation';
@@ -12,15 +8,14 @@ import { readAudit, recordAudit, recordInvalidCodeAudit } from './audit';
 import { config } from './config';
 import { storeDelegation } from './delegation-store';
 import { validateDelegation } from './delegations';
-import { fetchRecentCommits } from './github';
-import { makeHaikuGenerator } from './haiku';
 import { getBackendIdentity } from './identity';
+import { generateHaikuForOwner } from './pipeline';
 import { backendPolicy, ownerDidFromAddress } from './policy';
-import { buildProof } from './proof';
 import {
   checkHaikuRequestBackoff,
   consumeInvalidHaikuAttempt,
   consumeMatchedOwnerHaikuAttempt,
+  consumeOwnerPreviewAttempt,
   type HaikuRateLimitResult,
 } from './rate-limit';
 import { makeSecretsProvider } from './secrets';
@@ -48,11 +43,18 @@ import {
 export async function buildServer(): Promise<FastifyInstance> {
   await verifyTeeStartup();
 
-  const app = Fastify({ logger: false });
+  // Logging ON. The backend runs in the attested TEE, so logging error MESSAGES
+  // server-side is safe and is the only way to tell which pipeline stage failed.
+  // We never log secret VALUES or raw commit contents (only generic + stage).
+  const app = Fastify({ logger: { level: process.env['GITHAIKU_LOG_LEVEL'] ?? 'info' } });
   const secrets = makeSecretsProvider();
 
   app.setErrorHandler((error, request, reply) => {
-    if (request.url.startsWith('/api/haiku')) {
+    // Log the REAL error server-side (safe in the TEE) before redacting it out
+    // of the response.
+    request.log.error({ err: error, url: request.url }, 'request error');
+
+    if (request.url.startsWith('/api/haiku') || request.url.startsWith('/api/preview')) {
       reply.code(503);
       reply.header('content-type', 'application/json');
       return reply.send(serializeGuardedResponse(error));
@@ -257,43 +259,61 @@ export async function buildServer(): Promise<FastifyInstance> {
         return sendRateLimited(reply, matchedLimit);
       }
 
-      try {
-        // 2. Resolve the owner's secrets (dev-local or tc-cli delegated).
-        const ownerSecrets = await secrets.getOwnerSecrets(owner);
+      // 2-5. Run the shared pipeline: secrets -> github -> generate -> guard.
+      const result = await generateHaikuForOwner(owner, secrets);
 
-        // 3. Fetch bounded commit metadata (messages/repos/timestamps only).
-        const { commits } = await fetchRecentCommits({
-          githubLogin: owner.githubLogin,
-          githubToken: ownerSecrets.githubToken,
-        });
-
-        if (commits.length === 0) {
-          await recordAudit({ code, ownerId: owner.ownerId, decision: 'deny', reason: 'no_recent_activity' });
-          const denial: EgressPayload = { allowed: false, reason: 'no recent activity' };
-          return reply.send(serializeGuardedResponse(denial));
-        }
-
-        // 4. Generate the haiku (RedPill when keyed; deterministic fallback).
-        const generator = makeHaikuGenerator();
-        const lines = await generator.generate(commits);
-
-        // 5. Build the guarded success shape with real (in-TEE) provenance.
-        const success: EgressPayload = {
-          allowed: true,
-          haiku: { lines },
-          proof: await buildProof(),
-        };
-        const guarded = guardOutboundPayload(success);
-        await recordAudit({ code, ownerId: owner.ownerId, decision: 'allow', reason: 'ok' });
-        return reply.send(JSON.stringify(guarded));
-      } catch (err) {
-        // Operational failure. Redacted to a denial carrying no commit data.
-        await recordAudit({ code, ownerId: owner.ownerId, decision: 'deny', reason: 'error' });
-        reply.code(503);
-        return reply.send(serializeGuardedResponse(err));
+      if (result.ok) {
+        await recordAudit({ code, ownerId: owner.ownerId, decision: 'allow', reason: result.auditReason });
+        return reply.send(JSON.stringify(result.payload));
       }
+
+      // Staged, still-safe failure. Log the REAL error server-side (TEE-safe);
+      // the response carries only a generic reason + the diagnostic stage.
+      if (result.logError !== null) {
+        request.log.error(
+          { err: result.logError, stage: result.stage, ownerId: owner.ownerId },
+          'haiku pipeline failed',
+        );
+      }
+      await recordAudit({ code, ownerId: owner.ownerId, decision: 'deny', reason: result.auditReason });
+      reply.code(result.statusCode);
+      return reply.send(JSON.stringify(result.payload));
     },
   );
+
+  // --- Owner preview: owner-authed full-pipeline run (THE diagnostic) -------
+  // Same SIWE owner auth as the other owner endpoints. Resolves the owner by the
+  // authenticated address and runs the EXACT same pipeline as /api/haiku so the
+  // owner can test their setup and preview the haiku. Response is the guarded
+  // egress shape: success (200) or the staged guarded denial (non-2xx).
+  app.post('/api/preview', async (request, reply) => {
+    reply.header('content-type', 'application/json');
+
+    const ctx = await authenticateOwner(request, reply);
+    if (!ctx) return;
+
+    const previewLimit = consumeOwnerPreviewAttempt(ctx.owner.ownerId);
+    if (!previewLimit.allowed) {
+      return sendRateLimited(reply, previewLimit);
+    }
+
+    const result = await generateHaikuForOwner(ctx.owner, secrets);
+
+    if (result.ok) {
+      await recordAudit({ code: '', ownerId: ctx.owner.ownerId, decision: 'allow', reason: 'preview_ok' });
+      return reply.send(JSON.stringify(result.payload));
+    }
+
+    if (result.logError !== null) {
+      request.log.error(
+        { err: result.logError, stage: result.stage, ownerId: ctx.owner.ownerId },
+        'preview pipeline failed',
+      );
+    }
+    await recordAudit({ code: '', ownerId: ctx.owner.ownerId, decision: 'deny', reason: `preview_${result.auditReason}` });
+    reply.code(result.statusCode);
+    return reply.send(JSON.stringify(result.payload));
+  });
 
   return app;
 }

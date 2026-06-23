@@ -1,7 +1,7 @@
 import Ajv2020 from 'ajv/dist/2020';
 
 import { egressSchema } from './schema';
-import type { EgressDenialPayload, EgressPayload } from './types';
+import { EGRESS_STAGES, type EgressDenialPayload, type EgressPayload, type EgressStage } from './types';
 
 export class OutboundGuardError extends Error {
   constructor() {
@@ -63,12 +63,19 @@ function sanitizeToSnapshot(payload: unknown): Record<string, unknown> {
     };
   }
 
-  // Denial / error branch: only `allowed: false` + a `reason` string survive.
-  // Any `commits`, `error`, `diff`, secrets, etc. are dropped by omission.
-  return {
+  // Denial / error branch: only `allowed: false` + a `reason` string + an
+  // optional `stage` from the known enum survive. Any `commits`, `error`,
+  // `diff`, secrets, etc. are dropped by omission. `stage` is only carried when
+  // it is one of the known stage strings, so it can never smuggle data.
+  const snapshot: Record<string, unknown> = {
     allowed: false,
     reason: payload['reason'],
   };
+  const rawStage = payload['stage'];
+  if (typeof rawStage === 'string' && (EGRESS_STAGES as readonly string[]).includes(rawStage)) {
+    snapshot['stage'] = rawStage as EgressStage;
+  }
+  return snapshot;
 }
 
 export function normalizeOutboundError(_error: unknown): EgressDenialPayload {

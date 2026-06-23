@@ -94,6 +94,51 @@ describe('guardOutbound', () => {
     expect(guarded).not.toHaveProperty('error');
   });
 
+  it('keeps a valid `stage` on denial payloads (diagnostic, no data)', () => {
+    const guarded = guardOutboundPayload({
+      allowed: false,
+      reason: 'could not read your stored token',
+      stage: 'secrets',
+    });
+    expect(guarded).toEqual({ allowed: false, reason: 'could not read your stored token', stage: 'secrets' });
+  });
+
+  it('accepts denials with each known stage value', () => {
+    for (const stage of ['code', 'secrets', 'github', 'generate', 'internal'] as const) {
+      const guarded = guardOutboundPayload({ allowed: false, reason: 'nope', stage });
+      expect(guarded).toEqual({ allowed: false, reason: 'nope', stage });
+    }
+  });
+
+  it('drops an unknown `stage` value rather than leaking it', () => {
+    const guarded = guardOutboundPayload({
+      allowed: false,
+      reason: 'nope',
+      stage: 'leaky-commit-data' as unknown as 'secrets',
+    });
+    expect(guarded).toEqual({ allowed: false, reason: 'nope' });
+    expect(guarded).not.toHaveProperty('stage');
+  });
+
+  it('omits `stage` when not provided', () => {
+    const guarded = guardOutboundPayload({ allowed: false, reason: 'invalid code' });
+    expect(guarded).toEqual({ allowed: false, reason: 'invalid code' });
+    expect(guarded).not.toHaveProperty('stage');
+  });
+
+  it('never accepts `stage` on a success-with-data payload', () => {
+    expect(() =>
+      guardOutboundPayload({
+        ...validSuccess,
+        stage: 'generate',
+      }),
+    ).not.toThrow();
+    // The sanitizer drops it from the success snapshot; success never carries stage.
+    const guarded = guardOutboundPayload({ ...validSuccess, stage: 'generate' });
+    expect(guarded).toEqual(validSuccess);
+    expect(guarded).not.toHaveProperty('stage');
+  });
+
   it('rejects denial reasons that are not short printable strings', () => {
     expect(() =>
       guardOutboundPayload({

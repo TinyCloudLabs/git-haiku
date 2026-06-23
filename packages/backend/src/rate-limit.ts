@@ -15,6 +15,8 @@ import type { FastifyRequest } from 'fastify';
  */
 
 export const HAIKU_RATE_MAX = Number(process.env['GITHAIKU_HAIKU_RATE_MAX'] ?? 20);
+// Owner preview is owner-authed (SIWE), so it's keyed per owner, not per IP.
+export const PREVIEW_RATE_MAX = Number(process.env['GITHAIKU_PREVIEW_RATE_MAX'] ?? 10);
 export const HAIKU_RATE_WINDOW_MS = parseWindowMs(process.env['GITHAIKU_HAIKU_RATE_WINDOW'] ?? '1 minute');
 export const HAIKU_INVALID_IP_MAX = Number(process.env['GITHAIKU_INVALID_IP_MAX'] ?? HAIKU_RATE_MAX);
 export const HAIKU_INVALID_CODE_MAX = Number(process.env['GITHAIKU_INVALID_CODE_MAX'] ?? HAIKU_RATE_MAX);
@@ -42,6 +44,7 @@ interface IpPenalty extends Bucket {
 const invalidIpBuckets = new Map<string, IpPenalty>();
 const invalidCodeBuckets = new Map<string, Bucket>();
 const matchedOwnerBuckets = new Map<string, Bucket>();
+const ownerPreviewBuckets = new Map<string, Bucket>();
 
 function parseWindowMs(value: string): number {
   const trimmed = value.trim().toLowerCase();
@@ -184,11 +187,24 @@ export function consumeMatchedOwnerHaikuAttempt(request: FastifyRequest, ownerId
   return denied(bucket.resetAt - now);
 }
 
+/**
+ * Per-owner limit for the owner-authed /api/preview endpoint. Keyed by ownerId
+ * (auth already proved control of the address), independent of IP.
+ */
+export function consumeOwnerPreviewAttempt(ownerId: string): HaikuRateLimitResult {
+  const now = nowMs();
+  const bucket = getBucket(ownerPreviewBuckets, ownerId, now);
+  bucket.count += 1;
+  if (bucket.count <= PREVIEW_RATE_MAX) return allow();
+  return denied(bucket.resetAt - now);
+}
+
 /** Reset in-memory limiter state (tests only). */
 export function resetHaikuRateLimits(): void {
   invalidIpBuckets.clear();
   invalidCodeBuckets.clear();
   matchedOwnerBuckets.clear();
+  ownerPreviewBuckets.clear();
 }
 
 /** Snapshot in-memory limiter state (tests only). */
