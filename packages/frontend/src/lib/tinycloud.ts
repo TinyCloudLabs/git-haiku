@@ -126,20 +126,18 @@ export function composeOwnerRequest(info: ServerInfo, ownerDid: string): Compose
  * the delegation step can materialize the backend's portion).
  *
  * Lifecycle (mirrors listen's owner sign-in): construct → clear any stale
- * persisted session for this owner → `signIn()` (full wallet flow, host
- * resolution, fresh recap) → only THEN call services (`putGithubToken`,
- * `materializeBackendDelegation`).
+ * persisted session for this owner → `signIn()` (full wallet flow, fresh recap)
+ * → only THEN call services (`putGithubToken`, `materializeBackendDelegation`).
  *
- * Why clear the persisted session first: the web-sdk's `signIn()` begins with an
- * internal `restoreSession()` and, when BrowserSessionStorage holds a session
- * for this address, returns it WITHOUT running the wallet flow that resolves
- * hosts. A restored session does not populate the node's `tinycloudHosts`, so
- * the subsequent `ensureOwnedSpaceHosted('secrets')` throws "TinyCloud hosts
- * have not been resolved." `tinycloudHosts` is now always set (see config.ts),
- * which alone fixes the host error, but clearing also guarantees the owner setup
- * signs the freshly composed recap (which carries the owner's encryption-network
- * grant) instead of silently reusing a stale recap. listen clears the persisted
- * session the same way before a fresh sign-in.
+ * Why clear the persisted session first: this is the owner SETUP path, which
+ * must sign the freshly composed recap (carrying the owner's encryption-network
+ * + scoped-secret grants) rather than silently restoring a stale recap that
+ * lacks them. Clearing forces `signIn()` to run the full wallet flow and sign
+ * the current capability request. listen does the same — it calls
+ * `clearPersistedSession(addr)` before its fresh-wallet `createAndSignIn`, only
+ * after restore attempts have been exhausted. (This is NOT a host workaround:
+ * as of web-sdk 2.4.0-beta.11 the SDK resolves/rehydrates hosts itself, so
+ * `tinycloudHosts` is left unset unless explicitly overridden — see config.ts.)
  *
  * @param ownerAddress - The owner's checksummed/lowercased address, used to
  *   target the persisted session to clear.
@@ -151,8 +149,8 @@ export async function createAndSignIn(
 ): Promise<TinyCloudWeb> {
   const tcw = new (TinyCloudWeb as unknown as new (cfg: unknown) => TinyCloudWeb)({
     providers: { web3: { driver: web3Provider } },
-    // Always set — guarantees `requireTinyCloudHosts()` is satisfied on both the
-    // fresh-sign-in and the internal restore paths.
+    // Optional override only — undefined lets the SDK resolve the node itself
+    // (registry → node.tinycloud.xyz fallback). See config.ts.
     tinycloudHosts: TINYCLOUD_HOSTS,
     autoCreateSpace: true,
     sessionStorage: new BrowserSessionStorage(),
@@ -165,8 +163,9 @@ export async function createAndSignIn(
   });
   // Some SDK signing paths still read the provider property directly.
   (tcw as unknown as { provider: providers.Web3Provider }).provider = web3Provider;
-  // Bypass the SDK's internal restore short-circuit so signIn() runs the full
-  // wallet flow (host resolution + fresh recap), matching listen.
+  // Owner setup must sign the freshly composed recap: clear any stale persisted
+  // session so signIn() runs the full wallet flow and signs the current
+  // capability request, matching listen's pre-fresh-sign-in clear.
   await tcw.clearPersistedSession(ownerAddress);
   await tcw.signIn();
   return tcw;
@@ -216,11 +215,11 @@ export async function materializeBackendDelegation(
 /**
  * Restore a persisted browser session for `address`, or null if none.
  *
- * `tinycloudHosts` is always set (see config.ts), so a session restored here
- * satisfies `requireTinyCloudHosts()` — service calls (`secrets.put`,
- * `ensureOwnedSpaceHosted`) work without a fresh `signIn()` re-resolving hosts.
- * The web-sdk restore path does NOT populate hosts itself, so this explicit host
- * config is what makes a restored session usable for services.
+ * As of web-sdk 2.4.0-beta.11 a restored session rehydrates its own
+ * `tinycloudHosts` (persisted at sign-in, with a registry → node.tinycloud.xyz
+ * lazy fallback), so service calls (`secrets.put`, `ensureOwnedSpaceHosted`)
+ * work without a fresh `signIn()`. `tinycloudHosts` is passed only as an
+ * explicit override (undefined otherwise — see config.ts).
  */
 export async function restoreSession(address: string): Promise<TinyCloudWeb | null> {
   const tcw = new (TinyCloudWeb as unknown as new (cfg: unknown) => TinyCloudWeb)({

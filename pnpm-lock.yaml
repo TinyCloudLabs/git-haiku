@@ -58,11 +58,11 @@ importers:
         specifier: ^0.8.4
         version: 0.8.7
       '@tinycloud/sdk-core':
-        specifier: 2.4.0-beta.10
-        version: 2.4.0-beta.10(ethers@5.8.0)(typescript@5.9.3)
+        specifier: 2.4.0-beta.11
+        version: 2.4.0-beta.11(ethers@5.8.0)(typescript@5.9.3)
       '@tinycloud/web-sdk':
-        specifier: 2.4.0-beta.10
-        version: 2.4.0-beta.10(typescript@5.9.3)
+        specifier: 2.4.0-beta.11
+        version: 2.4.0-beta.11(typescript@5.9.3)
       '@tinycloud/web-sdk-wasm':
         specifier: 1.7.4
         version: 1.7.4
@@ -932,27 +932,27 @@ packages:
     resolution: {integrity: sha512-wyKsgc4Dwgj16gXk9GBZZA7j70EG77B1QKgcJYYwHK1yydxwP+1XHzJH9E4eyzWsamCQ2fuTGEJ/ju1rbQrPaQ==}
     engines: {node: '>=18'}
 
-  '@tinycloud/node-sdk@2.4.0-beta.10':
-    resolution: {integrity: sha512-isjN4FhFDaJ+FZ4+GWO59NZlhAJtClbubojLV8MeQ1LVHn2nmhSe0+XLlN/YhltBsCO5kaRUjUJmfw1QqxUHtQ==}
+  '@tinycloud/node-sdk@2.4.0-beta.11':
+    resolution: {integrity: sha512-fwuY86aZDlaejOyv5VloTrGBMMPGeJTGBwhRHw5luhQRteCe7MPoqEF9k2zutTu/WPKBamhaZmH68RQIMMwF6A==}
     engines: {node: '>=18'}
 
   '@tinycloud/sdk-core@2.3.0':
     resolution: {integrity: sha512-JZK8Co5+fgPpUIGWtno3jows6Y5DZCXmcpZfBV3YiUE6ZTet1TX2qP/xfOViYU6a/b370t86M5g+kqKLqMDu7g==}
 
-  '@tinycloud/sdk-core@2.4.0-beta.10':
-    resolution: {integrity: sha512-Znr3z0OK5tMhln2mZYVSUrGpKZFB0VMKkz44avqukgPst0gf/wbzS1PyycjTxCIDcxgE+XUqafQayoLrXwUB6w==}
+  '@tinycloud/sdk-core@2.4.0-beta.11':
+    resolution: {integrity: sha512-1UvFTJ84Vv26aZc9qgbcrs7EDmf0rUstDHs0naooq35LoiLSh7ouiUgbZaDryPeaEYy3DVZVqoQxZwDpsMXd0w==}
 
   '@tinycloud/sdk-services@2.3.0':
     resolution: {integrity: sha512-ptwKxrihxD/Tz3SvrnfsXQZYvAIVsMa+SeZmL6fBluGMquyQWJy6MXVN6MnlViMoEjGTpDkLxz58/7wkvpWzcw==}
 
-  '@tinycloud/sdk-services@2.4.0-beta.10':
-    resolution: {integrity: sha512-jisjhkY++QUx33qN59N3JDfQcUP4JoSnXjtLg+trjL2bTUodjKpaUDByshvOzztKsDRfysnb7vhiASDc+JxD3g==}
+  '@tinycloud/sdk-services@2.4.0-beta.11':
+    resolution: {integrity: sha512-kZaTokh+jTuF+waFg7Y+o7EEHbm52X46SPrOVZFuycKHz7j6BnD0eSxHa4/7O/ySdUVQkG0VNIG7+YNUrev9KQ==}
 
   '@tinycloud/web-sdk-wasm@1.7.4':
     resolution: {integrity: sha512-eb02Zgo78wvdZtzO+3A/I64dqhFIILoD0T51li41duNcW0nUSjsn51oIBxIFEjmCe0RqU8W1NqJ3Pcn3e6eBBw==}
 
-  '@tinycloud/web-sdk@2.4.0-beta.10':
-    resolution: {integrity: sha512-yNsIlbyVYCmiNnoqhdH0Vbg/+YwbnX8+2a/+sy3bjIz01IHjhySFlSv/ReHgYOBn+mnX++4c4TdHvyc1jLqm4g==}
+  '@tinycloud/web-sdk@2.4.0-beta.11':
+    resolution: {integrity: sha512-fjoyRoxV1kkNEAfPKUXitwu4w9REtgdpwf74EIwfUXO9ZbbaDwrox2NTX1wwDLNCdd9AfDrrxs/ZpOTp9vgA6g==}
 
   '@types/aria-query@5.0.4':
     resolution: {integrity: sha512-rfT93uj5s0PRL7EzccGMs3brplhcrghnDoV26NqKhCAS1hVo+WdNsPvE/yb6ilfr5hi2MEk6d5EWJTKdxg8jVw==}
@@ -3328,10 +3328,10 @@ snapshots:
       - typescript
       - utf-8-validate
 
-  '@tinycloud/node-sdk@2.4.0-beta.10(ethers@5.8.0)(typescript@5.9.3)':
+  '@tinycloud/node-sdk@2.4.0-beta.11(ethers@5.8.0)(typescript@5.9.3)':
     dependencies:
       '@tinycloud/node-sdk-wasm': 1.7.4
-      '@tinycloud/sdk-core': 2.4.0-beta.10(ethers@5.8.0)(typescript@5.9.3)
+      '@tinycloud/sdk-core': 2.4.0-beta.11(ethers@5.8.0)(typescript@5.9.3)
       siwe: 3.0.0(ethers@5.8.0)
     transitivePeerDependencies:
       - bufferutil
@@ -3358,13 +3358,13 @@ snapshots:
       - typescript
       - utf-8-validate
 
-  '@tinycloud/sdk-core@2.4.0-beta.10(ethers@5.8.0)(typescript@5.9.3)':
+  '@tinycloud/sdk-core@2.4.0-beta.11(ethers@5.8.0)(typescript@5.9.3)':
     dependencies:
       '@multiformats/multiaddr': 13.0.3
       '@multiformats/multiaddr-to-uri': 12.0.0
       '@multiformats/uri-to-multiaddr': 10.0.0
       '@noble/curves': 1.9.7
-      '@tinycloud/sdk-services': 2.4.0-beta.10
+      '@tinycloud/sdk-services': 2.4.0-beta.11
       ms: 2.1.3
       multiformats: 13.4.2
       siwe: 3.0.0(ethers@5.8.0)
@@ -3381,19 +3381,19 @@ snapshots:
     dependencies:
       zod: 3.25.76
 
-  '@tinycloud/sdk-services@2.4.0-beta.10':
+  '@tinycloud/sdk-services@2.4.0-beta.11':
     dependencies:
       zod: 3.25.76
 
   '@tinycloud/web-sdk-wasm@1.7.4': {}
 
-  '@tinycloud/web-sdk@2.4.0-beta.10(typescript@5.9.3)':
+  '@tinycloud/web-sdk@2.4.0-beta.11(typescript@5.9.3)':
     dependencies:
       '@metamask/detect-provider': 1.2.0
       '@multiformats/multiaddr': 13.0.3
       '@multiformats/multiaddr-to-uri': 12.0.0
-      '@tinycloud/node-sdk': 2.4.0-beta.10(ethers@5.8.0)(typescript@5.9.3)
-      '@tinycloud/sdk-core': 2.4.0-beta.10(ethers@5.8.0)(typescript@5.9.3)
+      '@tinycloud/node-sdk': 2.4.0-beta.11(ethers@5.8.0)(typescript@5.9.3)
+      '@tinycloud/sdk-core': 2.4.0-beta.11(ethers@5.8.0)(typescript@5.9.3)
       '@tinycloud/web-sdk-wasm': 1.7.4
       axios: 1.18.0
       ethers: 5.8.0

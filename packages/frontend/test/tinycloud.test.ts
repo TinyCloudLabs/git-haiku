@@ -3,17 +3,20 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 /**
  * Guards the owner sign-in lifecycle (aligned to listen's TinyCloudWeb pattern).
  *
- * Two live bugs this locks down:
+ * Invariants this locks down:
  *
- * 1. "TinyCloud hosts have not been resolved. Call signIn() first." — the
- *    web-sdk's `signIn()` begins with an internal `restoreSession()` and, when
- *    BrowserSessionStorage holds a session, returns it WITHOUT running the wallet
- *    flow that resolves hosts. A restored session leaves `tinycloudHosts` empty,
- *    so the next `ensureOwnedSpaceHosted('secrets')` throws. The fix: always pass
- *    a concrete `tinycloudHosts`, and clear any stale persisted session BEFORE
- *    `signIn()` so the full wallet flow runs.
+ * 1. `tinycloudHosts` is OPTIONAL — left undefined unless VITE_TINYCLOUD_HOST is
+ *    set as an explicit override. As of web-sdk 2.4.0-beta.11 the SDK resolves
+ *    the node itself (registry → node.tinycloud.xyz) and a restored session
+ *    rehydrates its own hosts, so no hardcoded host is needed. (The default test
+ *    env sets no override, so the ctor receives `tinycloudHosts: undefined`.)
  *
- * 2. secrets.put's escalation/requestPermissions path needs the app manifest
+ * 2. Owner setup clears any stale persisted session BEFORE `signIn()` so the
+ *    full wallet flow signs the freshly composed recap (carrying the
+ *    encryption-network + scoped-secret grants), not a stale one. Mirrors
+ *    listen's pre-fresh-sign-in clear.
+ *
+ * 3. secrets.put's escalation/requestPermissions path needs the app manifest
  *    (`app_id: 'com.githaiku'`) STORED on the instance.
  *
  * The real flow is exercised in a browser (OpenKey + WASM); here we mock the
@@ -69,21 +72,20 @@ describe('owner sign-in lifecycle (listen-aligned)', () => {
     expect(manifest?.app_id).toBe('com.githaiku');
   });
 
-  it('createAndSignIn always configures tinycloudHosts (hosts present on every path)', async () => {
+  it('createAndSignIn leaves tinycloudHosts undefined when no override is set (SDK resolves the node)', async () => {
     await createAndSignIn({} as never, composed, OWNER);
     const cfg = ctorConfigs.at(-1)!;
-    const hosts = cfg.tinycloudHosts as string[] | undefined;
-    expect(Array.isArray(hosts)).toBe(true);
-    expect(hosts!.length).toBeGreaterThan(0);
-    expect(hosts![0]).toMatch(/^https?:\/\//);
+    // No VITE_TINYCLOUD_HOST in the test env ⇒ optional hosts are undefined, so
+    // the SDK resolves the node (registry → node.tinycloud.xyz fallback).
+    expect(cfg.tinycloudHosts).toBeUndefined();
   });
 
-  it('createAndSignIn clears the stale persisted session BEFORE signIn (so the wallet flow resolves hosts)', async () => {
+  it('createAndSignIn clears the stale persisted session BEFORE signIn (so setup signs the fresh recap)', async () => {
     await createAndSignIn({} as never, composed, OWNER);
     expect(clearPersistedSession).toHaveBeenCalledWith(OWNER);
-    // Ordering is the invariant: a service-bearing signIn must not be preceded
-    // by an internal restore short-circuit. Clearing first guarantees the full
-    // wallet flow runs, which is what resolves hosts.
+    // Ordering is the invariant: the owner-setup signIn must not be preceded by
+    // an internal restore short-circuit. Clearing first guarantees the full
+    // wallet flow runs and signs the freshly composed recap.
     expect(callOrder).toEqual(['clearPersistedSession', 'signIn']);
   });
 
@@ -94,11 +96,11 @@ describe('owner sign-in lifecycle (listen-aligned)', () => {
     expect(manifest?.app_id).toBe('com.githaiku');
   });
 
-  it('restoreSession always configures tinycloudHosts (restored session can use services)', async () => {
+  it('restoreSession leaves tinycloudHosts undefined when no override is set (SDK rehydrates hosts)', async () => {
     await restore(OWNER);
     const cfg = ctorConfigs.at(-1)!;
-    const hosts = cfg.tinycloudHosts as string[] | undefined;
-    expect(Array.isArray(hosts)).toBe(true);
-    expect(hosts!.length).toBeGreaterThan(0);
+    // web-sdk 2.4.0-beta.11 rehydrates a restored session's hosts, so no
+    // hardcoded host is needed for service calls to work.
+    expect(cfg.tinycloudHosts).toBeUndefined();
   });
 });
