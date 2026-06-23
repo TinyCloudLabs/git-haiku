@@ -6,6 +6,7 @@ import {
   AUTH_MESSAGE_PREFIX,
   buildAuthMessage,
   mintCode,
+  previewHaiku,
   registerOwner,
   sendDelegation,
   type OwnerAuthContext,
@@ -84,5 +85,53 @@ describe('owner-auth headers', () => {
     await mintCode(auth);
     const nonceCalls = fetchMock.mock.calls.filter((c) => String(c[0]).endsWith('/api/auth/nonce'));
     expect(nonceCalls.length).toBe(2);
+  });
+});
+
+/** Mock fetch: nonce endpoint then /api/preview with a chosen body + status. */
+function mockPreview(body: unknown, status: number) {
+  const captured: { headers?: Record<string, string>; method?: string } = {};
+  const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.endsWith('/api/auth/nonce')) {
+      return new Response(JSON.stringify({ nonce: 'deadbeefcafef00d' }), { status: 200 });
+    }
+    captured.headers = init?.headers as Record<string, string>;
+    captured.method = init?.method;
+    return new Response(JSON.stringify(body), { status });
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return { captured };
+}
+
+describe('previewHaiku', () => {
+  it('POSTs /api/preview with auth headers and returns the haiku on 200', async () => {
+    const { captured } = mockPreview(
+      {
+        allowed: true,
+        haiku: { lines: ['one two three four five', 'six seven eight nine ten eleven', 'twelve thirteen'] },
+        proof: { policy_id: 'p', image_digest: null, attestation_url: null },
+      },
+      200,
+    );
+
+    const res = await previewHaiku(auth);
+
+    expect(captured.method).toBe('POST');
+    expect(getAddress(captured.headers!['x-githaiku-address'])).toBe(getAddress(account.address));
+    expect(captured.headers!['x-githaiku-signature']).toMatch(/^0x[0-9a-f]+$/i);
+    expect(res.allowed).toBe(true);
+    if (res.allowed) expect(res.haiku.lines).toHaveLength(3);
+  });
+
+  it('returns the staged denial body on a non-2xx response', async () => {
+    mockPreview({ allowed: false, reason: 'no token', stage: 'secrets' }, 422);
+    const res = await previewHaiku(auth);
+    expect(res.allowed).toBe(false);
+    if (!res.allowed) expect(res.stage).toBe('secrets');
+  });
+
+  it('throws when the body is not a valid preview shape', async () => {
+    mockPreview({ oops: true }, 500);
+    await expect(previewHaiku(auth)).rejects.toThrow(/preview failed/);
   });
 });

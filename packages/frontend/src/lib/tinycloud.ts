@@ -195,6 +195,21 @@ export async function putGithubToken(tcw: TinyCloudWeb, token: string): Promise<
 }
 
 /**
+ * Check whether the owner already has a GITHUB_TOKEN stored under the `githaiku`
+ * scope, WITHOUT returning or logging the value. Returns true iff
+ * `secrets.get` succeeds (token present + decryptable). A miss / error → false.
+ *
+ * Used by the returning-owner view to show "✓ token stored" instead of treating
+ * the form as blank. The decrypted value is read into a local and immediately
+ * discarded — it is never returned, rendered, or logged.
+ */
+export async function hasGithubToken(tcw: TinyCloudWeb): Promise<boolean> {
+  await tcw.ensureOwnedSpaceHosted('secrets');
+  const result = await tcw.secrets.get('GITHUB_TOKEN', { scope: GITHUB_TOKEN_SCOPE });
+  return result.ok;
+}
+
+/**
  * Materialize the backend's manifest-declared delegation (KV-get on
  * vault/secrets/scoped/githaiku/GITHUB_TOKEN + decrypt) and serialize it for
  * POST. The owner's

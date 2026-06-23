@@ -58,6 +58,21 @@ export interface HaikuDenial {
 }
 export type HaikuResponse = HaikuSuccess | HaikuDenial;
 
+/** Stages an owner preview can fail at (mirrors the backend egress guard). */
+export type PreviewStage = 'secrets' | 'github' | 'generate' | 'internal';
+
+export interface PreviewSuccess {
+  allowed: true;
+  haiku: { lines: [string, string, string] };
+  proof: { policy_id: string; image_digest: string | null; attestation_url: string | null };
+}
+export interface PreviewDenial {
+  allowed: false;
+  reason: string;
+  stage: PreviewStage;
+}
+export type PreviewResponse = PreviewSuccess | PreviewDenial;
+
 export interface OwnerResult {
   ownerId: string;
   secretCode: string;
@@ -199,6 +214,23 @@ export async function revokeCode(
     body: JSON.stringify({ codeId }),
   });
   return jsonOrThrow<{ codeId: string; revokedAt: string }>(res, 'revoke code');
+}
+
+/**
+ * Owner end-to-end preview: drive the full egress (read stored token → fetch
+ * GitHub activity → generate → guard) and return the haiku WITHOUT minting a
+ * code. Success is HTTP 200 `{allowed:true, haiku, proof}`; a staged failure is
+ * non-2xx `{allowed:false, reason, stage}`. We read the JSON body in BOTH cases
+ * so the caller can key its message off `stage`. No request body; owner SIWE
+ * auth headers only.
+ */
+export async function previewHaiku(auth: OwnerAuthContext): Promise<PreviewResponse> {
+  const res = await authedFetch('/api/preview', auth, { method: 'POST' });
+  const body = (await res.json().catch(() => null)) as PreviewResponse | null;
+  if (!body || typeof body.allowed !== 'boolean') {
+    throw new Error(`preview failed (${res.status})`);
+  }
+  return body;
 }
 
 export async function getAudit(auth: OwnerAuthContext): Promise<AuditEntry[]> {

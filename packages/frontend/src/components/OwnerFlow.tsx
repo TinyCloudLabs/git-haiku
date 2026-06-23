@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import {
   registerOwner,
@@ -7,7 +7,8 @@ import {
   type OwnerAuthContext,
 } from '../api';
 import { signInOwner, type OwnerSession } from '../lib/ownerSession';
-import { putGithubToken, materializeBackendDelegation } from '../lib/tinycloud';
+import { putGithubToken, materializeBackendDelegation, hasGithubToken } from '../lib/tinycloud';
+import { verifyGithubToken, type GithubTokenResult } from '../lib/githubVerify';
 import { OwnerDashboard } from './OwnerDashboard';
 
 type Phase = 'signin' | 'setup' | 'dashboard';
@@ -99,8 +100,58 @@ function SetupPhase({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // Returning-owner state: whether a token is ALREADY stored in their vault.
+  // `null` = still checking. We never read/show the token value, only presence.
+  const [tokenStored, setTokenStored] = useState<boolean | null>(null);
+
+  // Frontend-only token check (against api.github.com, never our backend).
+  const [verifying, setVerifying] = useState(false);
+  const [verifyResult, setVerifyResult] = useState<GithubTokenResult | null>(null);
+
+  // On mount, surface what's already there instead of a blank form.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const present = await hasGithubToken(session.tcw);
+        if (!cancelled) setTokenStored(present);
+      } catch {
+        if (!cancelled) setTokenStored(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [session.tcw]);
+
+  // Re-typing the token invalidates a stale verification result.
+  function onTokenChange(value: string) {
+    setGithubToken(value);
+    if (verifyResult) setVerifyResult(null);
+  }
+
+  async function verify() {
+    setVerifying(true);
+    setVerifyResult(null);
+    try {
+      const result = await verifyGithubToken(githubToken);
+      setVerifyResult(result);
+      // Default the login to the verified account if the field is empty.
+      if (result.ok && !githubLogin.trim()) setGithubLogin(result.login);
+    } finally {
+      setVerifying(false);
+    }
+  }
+
+  // Block storing a token we KNOW is invalid (a checked-and-failed result).
+  const tokenKnownInvalid = verifyResult !== null && !verifyResult.ok;
+
   async function run(e: React.FormEvent) {
     e.preventDefault();
+    if (tokenKnownInvalid) {
+      setError('This token failed verification — fix it before storing.');
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -137,6 +188,15 @@ function SetupPhase({
     <section className="card">
       <h2>Set up your haiku source</h2>
 
+      {tokenStored && (
+        <div className="stored-state">
+          <p>
+            <span className="ok-tick">✓</span> A GitHub token is already stored in your vault.
+            Re-store below to rotate it, or continue to your dashboard.
+          </p>
+        </div>
+      )}
+
       <div className="consent">
         <h3>What you&apos;re authorizing</h3>
         <ul>
@@ -169,12 +229,27 @@ function SetupPhase({
             className="input mono"
             type="password"
             value={githubToken}
-            onChange={(e) => setGithubToken(e.target.value)}
+            onChange={(e) => onTokenChange(e.target.value)}
             placeholder="ghp_…"
           />
+          <div className="row">
+            <button
+              type="button"
+              className="ghost small"
+              onClick={() => void verify()}
+              disabled={verifying || !githubToken.trim()}
+            >
+              {verifying ? 'Verifying…' : 'Verify token'}
+            </button>
+            <span className="muted token-verify-hint">Checks GitHub directly — your token never leaves your browser for this.</span>
+          </div>
+          {verifyResult && <TokenVerifyResult result={verifyResult} />}
           <TokenHelp />
         </label>
-        <button className="primary" disabled={busy || !githubLogin.trim() || !githubToken.trim()}>
+        <button
+          className="primary"
+          disabled={busy || !githubLogin.trim() || !githubToken.trim() || tokenKnownInvalid}
+        >
           {busy ? 'Working…' : 'Authorize & generate code'}
         </button>
       </form>
@@ -182,6 +257,45 @@ function SetupPhase({
       {status && <p className="muted status">{status}</p>}
       {error && <div className="denial">{error}</div>}
     </section>
+  );
+}
+
+// ── GitHub token verification result ──────────────────────────────────
+
+/**
+ * Renders the outcome of the frontend-only GitHub token check. Valid → green
+ * state with login + scopes (or a fine-grained note). Invalid → clear error
+ * pointing at the existing token-help links below.
+ */
+function TokenVerifyResult({ result }: { result: GithubTokenResult }) {
+  if (!result.ok) {
+    return (
+      <div className="denial token-verify">
+        <strong>Invalid or insufficient token.</strong> {result.message} Create a new one with the
+        links below.
+      </div>
+    );
+  }
+
+  return (
+    <div className="token-verify valid">
+      <p>
+        <span className="ok-tick">✓</span> Valid — authenticated as{' '}
+        <strong>{result.login}</strong>.
+      </p>
+      <p className="muted">
+        {result.scopes === null
+          ? 'Fine-grained token (GitHub does not expose its scopes here).'
+          : result.scopes.length === 0
+            ? 'Classic token with no scopes (read-only of public data).'
+            : `Scopes: ${result.scopes.join(', ')}`}
+      </p>
+      <p className="muted">
+        {result.canReadRepos
+          ? 'Confirmed read access to your repositories.'
+          : 'Note: could not confirm repository read access — fine for public-only sources.'}
+      </p>
+    </div>
   );
 }
 

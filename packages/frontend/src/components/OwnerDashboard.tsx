@@ -12,6 +12,7 @@ import {
   type OwnerAuthContext,
   type OwnerResult,
 } from '../api';
+import { PreviewHaiku } from './PreviewHaiku';
 
 /**
  * Owner dashboard: mint / list / rotate / revoke secret codes, show share URLs,
@@ -86,6 +87,12 @@ export function OwnerDashboard({
         <p className="muted">
           Signed in as <code className="mono">{shortDid(did)}</code> · GitHub{' '}
           <strong>{owner.githubLogin}</strong>
+          {owner.hasGithubToken && (
+            <>
+              {' '}
+              · <span className="ok-tick">✓</span> token stored
+            </>
+          )}
         </p>
         <div className="row">
           <button className="primary" onClick={onMint} disabled={busy}>
@@ -102,6 +109,8 @@ export function OwnerDashboard({
       </div>
 
       {justMinted && <NewCodeCard owner={owner.ownerId} minted={justMinted} />}
+
+      <PreviewHaiku auth={auth} />
 
       <div className="card">
         <h3>Codes</h3>
