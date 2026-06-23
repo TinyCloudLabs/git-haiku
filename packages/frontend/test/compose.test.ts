@@ -90,4 +90,41 @@ describe('composeOwnerRequest', () => {
     expect(target.expiryMs).toBeGreaterThanOrEqual(NINETY_DAYS_MS - 2 * 24 * 60 * 60 * 1000);
     expect(target.expiryMs).toBeLessThanOrEqual(NINETY_DAYS_MS + 2 * 24 * 60 * 60 * 1000);
   });
+
+  // ── OWNER recap (composed.resources) — what the owner's session signs ──
+  // The delegationTargets above are the BACKEND's subset. These assertions
+  // cover the OWNER's own grants (the recap that secrets.put is checked
+  // against), which the browser-recap bug exposed as the real gap.
+
+  it('grants the owner kv/get + kv/put on the SCOPED GITHUB_TOKEN vault path', () => {
+    const kv = composed.resources.find(
+      (r) => r.service === 'tinycloud.kv' && r.path === GITHUB_TOKEN_VAULT_PATH,
+    );
+    expect(kv).toBeDefined();
+    const actions = kv!.actions.map(String);
+    expect(actions).toContain('tinycloud.kv/get');
+    expect(actions).toContain('tinycloud.kv/put');
+  });
+
+  it("grants the owner network.create + decrypt on their OWN default encryption network", () => {
+    const enc = composed.resources.find(
+      (r) =>
+        r.service === 'tinycloud.encryption' &&
+        r.path === `urn:tinycloud:encryption:${OWNER_DID}:default`,
+    );
+    expect(enc).toBeDefined();
+    const actions = enc!.actions.map(String);
+    // network.create: first-time lazy creation. decrypt: seal/open the envelope.
+    expect(actions).toContain('tinycloud.encryption/network.create');
+    expect(actions).toContain('tinycloud.encryption/decrypt');
+  });
+
+  it("keeps the backend delegation a strict SUBSET (no put, no network.create)", () => {
+    const target = composed.delegationTargets.find((t) => t.did === BACKEND_DID)!;
+    const allActions = target.permissions.flatMap((p) => p.actions.map(String));
+    expect(allActions).not.toContain('tinycloud.kv/put');
+    expect(allActions).not.toContain('tinycloud.encryption/network.create');
+    expect(allActions).toContain('tinycloud.kv/get');
+    expect(allActions).toContain('tinycloud.encryption/decrypt');
+  });
 });

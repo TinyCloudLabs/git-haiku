@@ -32,6 +32,34 @@ function defaultEncryptionNetworkId(ownerDid: string, networkName = 'default'): 
   return `urn:tinycloud:encryption:${ownerDid}:${networkName}`;
 }
 
+/** Encryption-network name secrets are sealed under. */
+const ENCRYPTION_NETWORK_NAME = 'default';
+
+/**
+ * The owner's OWN encryption-network grant.
+ *
+ * `defaults: true` expands to KV + SQL only — it grants the owner NO encryption
+ * capability, so a manifest-recap session (the browser path) cannot create or
+ * seal to its default encryption network. `secrets.put` encrypts the payload via
+ * `encryptToNetwork`, which requires the network to exist (create) and to be
+ * usable (decrypt). We add this grant at compose time (owner DID is known then)
+ * so the owner's signed recap covers creating + using their own default network.
+ *
+ * `network.create` is needed only the first time (lazy network creation);
+ * `decrypt` is needed to seal/open the envelope on every put/get. This is the
+ * owner's grant on their OWN network — the backend's decrypt delegation (a
+ * subset: decrypt only) is unaffected.
+ */
+function ownerEncryptionPermission(ownerDid: string): NonNullable<Manifest['permissions']>[number] {
+  return {
+    service: 'tinycloud.encryption',
+    space: 'encryption',
+    path: defaultEncryptionNetworkId(ownerDid, ENCRYPTION_NETWORK_NAME),
+    actions: ['tinycloud.encryption/network.create', 'tinycloud.encryption/decrypt'],
+    skipPrefix: true,
+  };
+}
+
 /**
  * Build the backend delegate manifest from its advertised permissions.
  *
@@ -78,7 +106,18 @@ function backendManifestFromServerInfo(
  * DID so the backend gets the broad decrypt grant.
  */
 export function composeOwnerRequest(info: ServerInfo, ownerDid: string): ComposedManifestRequest {
-  return composeManifestRequest([APP_MANIFEST, backendManifestFromServerInfo(APP_MANIFEST, info, ownerDid)]);
+  // The app manifest the OWNER signs: APP_MANIFEST plus the owner's own
+  // encryption-network grant (create + decrypt on their default network), which
+  // `defaults: true` does not provide. Without it, `secrets.put`'s
+  // `encryptToNetwork` cannot create/seal the envelope under a recap session.
+  const ownerAppManifest: Manifest = {
+    ...APP_MANIFEST,
+    permissions: [...(APP_MANIFEST.permissions ?? []), ownerEncryptionPermission(ownerDid)],
+  };
+  return composeManifestRequest([
+    ownerAppManifest,
+    backendManifestFromServerInfo(APP_MANIFEST, info, ownerDid),
+  ]);
 }
 
 /**
@@ -115,6 +154,11 @@ export async function createAndSignIn(
  * backend reads.
  */
 export async function putGithubToken(tcw: TinyCloudWeb, token: string): Promise<void> {
+  // `secrets.put` seals the payload via the owner's default encryption network
+  // (`encryptToNetwork`), which requires the network to exist — it is NOT
+  // auto-created by `put`. Create-or-fetch it first (the recap grants
+  // network.create + decrypt, so this needs no extra prompt).
+  await tcw.ensureEncryptionNetwork(ENCRYPTION_NETWORK_NAME);
   const result = await tcw.secrets.put('GITHUB_TOKEN', token, { scope: GITHUB_TOKEN_SCOPE });
   if (!result.ok) {
     throw new Error(result.error?.message ?? 'secrets.put failed');
