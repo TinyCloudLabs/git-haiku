@@ -167,6 +167,17 @@ export async function requestHaiku(code: string): Promise<HaikuResponse> {
 
 // ── Owner-authenticated ───────────────────────────────────────────────
 
+/**
+ * Read the owner record bound to the authenticated address WITHOUT minting a
+ * code. Returns `null` when no owner record exists yet (HTTP 404); any other
+ * failure throws so the caller surfaces the error.
+ */
+export async function getOwner(auth: OwnerAuthContext): Promise<OwnerResult | null> {
+  const res = await authedFetch('/api/owner', auth);
+  if (res.status === 404) return null;
+  return jsonOrThrow<OwnerResult>(res, 'load owner');
+}
+
 export async function registerOwner(
   auth: OwnerAuthContext,
   input: { githubLogin: string },

@@ -102,6 +102,28 @@ export async function buildServer(): Promise<FastifyInstance> {
     }
   });
 
+  // --- Owner lookup (OWNER-AUTHENTICATED) ---------------------------------
+  // A returning owner reads their existing record by authenticated address. No
+  // code is minted on this read: secretCode/codeId are empty, which signals
+  // "nothing newly minted" to the client.
+  app.get('/api/owner', async (request, reply) => {
+    const auth = await authenticate(request, reply);
+    if (!auth) return;
+
+    const owner = findOwnerByAddress(auth.address);
+    if (!owner) {
+      reply.code(404);
+      return { error: 'no_owner', message: 'no owner record for the authenticated address' };
+    }
+    return {
+      ownerId: owner.ownerId,
+      githubLogin: owner.githubLogin,
+      hasGithubToken: owner.githubToken !== null,
+      secretCode: '',
+      codeId: '',
+    };
+  });
+
   // --- Owner setup (OWNER-AUTHENTICATED) ----------------------------------
   // The owner signs the auth message; we bind the created owner to their
   // recovered address. In prod the owner stores secrets in TinyCloud Secrets via
@@ -117,11 +139,19 @@ export async function buildServer(): Promise<FastifyInstance> {
       return { error: 'githubLogin is required' };
     }
 
-    // One address = one owner. A returning owner manages their existing record
-    // via the code/secret endpoints rather than creating a duplicate.
-    if (findOwnerByAddress(auth.address)) {
-      reply.code(409);
-      return { error: 'owner_exists', message: 'an owner already exists for this address' };
+    // One address = one owner. A returning owner gets their existing record back
+    // (idempotent) — no duplicate record, no duplicate code. secretCode/codeId
+    // are empty to signal "nothing newly minted".
+    const existing = findOwnerByAddress(auth.address);
+    if (existing) {
+      reply.code(200);
+      return {
+        ownerId: existing.ownerId,
+        githubLogin: existing.githubLogin,
+        hasGithubToken: existing.githubToken !== null,
+        secretCode: '',
+        codeId: '',
+      };
     }
 
     const result = createOwner({

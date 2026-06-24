@@ -45,8 +45,12 @@ export function OwnerDashboard({
   }, [auth]);
 
   // Seed with the first code minted at registration so the owner sees it once.
+  // A returning owner has no plaintext code (secretCode === ''); they just see
+  // their existing codes list via refresh(), not a bogus "new code" card.
   useEffect(() => {
-    setJustMinted({ codeId: owner.codeId, secretCode: owner.secretCode });
+    if (owner.secretCode) {
+      setJustMinted({ codeId: owner.codeId, secretCode: owner.secretCode });
+    }
     void refresh();
   }, [owner, refresh]);
 

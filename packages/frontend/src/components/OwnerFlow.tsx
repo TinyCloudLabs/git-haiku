@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import {
+  getOwner,
   registerOwner,
   sendDelegation,
   type OwnerResult,
@@ -43,9 +44,14 @@ export function OwnerFlow() {
 
   return (
     <SignInPhase
-      onSignedIn={(s) => {
+      onSignedIn={(s, existing) => {
         setSession(s);
-        setPhase('setup');
+        if (existing) {
+          setOwner(existing);
+          setPhase('dashboard');
+        } else {
+          setPhase('setup');
+        }
       }}
     />
   );
@@ -53,7 +59,11 @@ export function OwnerFlow() {
 
 // ── Phase 1: OpenKey sign-in ──────────────────────────────────────────
 
-function SignInPhase({ onSignedIn }: { onSignedIn: (s: OwnerSession) => void }) {
+function SignInPhase({
+  onSignedIn,
+}: {
+  onSignedIn: (s: OwnerSession, existing: OwnerResult | null) => void;
+}) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -61,7 +71,13 @@ function SignInPhase({ onSignedIn }: { onSignedIn: (s: OwnerSession) => void }) 
     setLoading(true);
     setError(null);
     try {
-      onSignedIn(await signInOwner());
+      // 1. OpenKey passkey sign-in. 2. get-or-route: an existing owner goes
+      // straight to their dashboard; a new address gets the setup form. A 404 in
+      // getOwner returns null (new owner); any other failure throws and is
+      // surfaced below — no silent fallback.
+      const s = await signInOwner();
+      const existing = await getOwner(s.auth);
+      onSignedIn(s, existing);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'sign-in failed');
     } finally {
