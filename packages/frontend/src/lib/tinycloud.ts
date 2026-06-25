@@ -5,6 +5,7 @@ import {
   serializeDelegation,
   type Manifest,
   type ComposedManifestRequest,
+  type ClientSession,
 } from '@tinycloud/web-sdk';
 import type { providers } from 'ethers';
 
@@ -141,12 +142,21 @@ export function composeOwnerRequest(info: ServerInfo, ownerDid: string): Compose
  *
  * @param ownerAddress - The owner's checksummed/lowercased address, used to
  *   target the persisted session to clear.
+ * @param nonce - Backend-issued, address-bound nonce. Passed into the SIWE recap
+ *   (via `siweConfig.nonce`, matching listen) so the SINGLE sign-in signature
+ *   the owner produces also establishes the backend session — the signed
+ *   `session.siwe` carries this nonce, which the backend validates at
+ *   /api/auth/verify before issuing the session JWT.
+ *
+ * Returns the live client AND the resulting `ClientSession`, whose `siwe`
+ * (signed message) + `signature` the caller POSTs to /api/auth/verify.
  */
 export async function createAndSignIn(
   web3Provider: providers.Web3Provider,
   composedRequest: ComposedManifestRequest,
   ownerAddress: string,
-): Promise<TinyCloudWeb> {
+  nonce: string,
+): Promise<{ tcw: TinyCloudWeb; session: ClientSession }> {
   const tcw = new (TinyCloudWeb as unknown as new (cfg: unknown) => TinyCloudWeb)({
     providers: { web3: { driver: web3Provider } },
     // Optional override only — undefined lets the SDK resolve the node itself
@@ -154,6 +164,9 @@ export async function createAndSignIn(
     tinycloudHosts: TINYCLOUD_HOSTS,
     autoCreateSpace: true,
     sessionStorage: new BrowserSessionStorage(),
+    // Embed the backend nonce in the SIWE message so the one sign-in signature
+    // also establishes the backend session (listen passes the nonce the same way).
+    siweConfig: { nonce },
     // `capabilityRequest` drives the SIWE recap, but secrets.put's
     // escalation/requestPermissions path needs the app manifest STORED on the
     // instance — so pass it explicitly (capabilityRequest still takes precedence
@@ -167,8 +180,8 @@ export async function createAndSignIn(
   // session so signIn() runs the full wallet flow and signs the current
   // capability request, matching listen's pre-fresh-sign-in clear.
   await tcw.clearPersistedSession(ownerAddress);
-  await tcw.signIn();
-  return tcw;
+  const session = await tcw.signIn();
+  return { tcw, session };
 }
 
 /**

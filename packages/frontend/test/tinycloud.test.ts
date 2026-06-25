@@ -29,6 +29,7 @@ const { ctorConfigs, callOrder, signIn, restoreSession, clearPersistedSession } 
     callOrder: [] as string[],
     signIn: vi.fn(async () => {
       callOrder.push('signIn');
+      return { siwe: 'siwe-message', signature: '0xsig' };
     }),
     restoreSession: vi.fn(async () => ({ status: 'none', session: null })),
     clearPersistedSession: vi.fn(async () => {
@@ -63,17 +64,29 @@ afterEach(() => {
 describe('owner sign-in lifecycle (listen-aligned)', () => {
   const composed = { delegationTargets: [] } as unknown as ComposedManifestRequest;
   const OWNER = '0x1111111111111111111111111111111111111111';
+  const NONCE = 'deadbeefcafef00d';
 
   it('createAndSignIn passes manifest (com.githaiku) alongside capabilityRequest', async () => {
-    await createAndSignIn({} as never, composed, OWNER);
+    await createAndSignIn({} as never, composed, OWNER, NONCE);
     const cfg = ctorConfigs.at(-1)!;
     expect(cfg.capabilityRequest).toBe(composed);
     const manifest = cfg.manifest as { app_id?: string } | undefined;
     expect(manifest?.app_id).toBe('com.githaiku');
   });
 
+  it('createAndSignIn embeds the backend nonce in the SIWE recap (single signature → backend session)', async () => {
+    await createAndSignIn({} as never, composed, OWNER, NONCE);
+    const cfg = ctorConfigs.at(-1)!;
+    expect((cfg.siweConfig as { nonce?: string } | undefined)?.nonce).toBe(NONCE);
+  });
+
+  it('createAndSignIn returns the signed SIWE message + signature from signIn()', async () => {
+    const { session } = await createAndSignIn({} as never, composed, OWNER, NONCE);
+    expect(session).toEqual({ siwe: 'siwe-message', signature: '0xsig' });
+  });
+
   it('createAndSignIn leaves tinycloudHosts undefined when no override is set (SDK resolves the node)', async () => {
-    await createAndSignIn({} as never, composed, OWNER);
+    await createAndSignIn({} as never, composed, OWNER, NONCE);
     const cfg = ctorConfigs.at(-1)!;
     // No VITE_TINYCLOUD_HOST in the test env ⇒ optional hosts are undefined, so
     // the SDK resolves the node (registry → node.tinycloud.xyz fallback).
@@ -81,7 +94,7 @@ describe('owner sign-in lifecycle (listen-aligned)', () => {
   });
 
   it('createAndSignIn clears the stale persisted session BEFORE signIn (so setup signs the fresh recap)', async () => {
-    await createAndSignIn({} as never, composed, OWNER);
+    await createAndSignIn({} as never, composed, OWNER, NONCE);
     expect(clearPersistedSession).toHaveBeenCalledWith(OWNER);
     // Ordering is the invariant: the owner-setup signIn must not be preceded by
     // an internal restore short-circuit. Clearing first guarantees the full

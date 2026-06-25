@@ -44,7 +44,7 @@ const {
     did: 'did:pkh:eip155:1:0xabc',
     backendDid: 'did:pkh:eip155:1:0xBACKEND',
     composedRequest: { delegationTargets: [{ did: 'did:pkh:eip155:1:0xBACKEND' }] },
-    auth: { address: '0xabc', sign: async () => '0xsig' },
+    auth: { address: '0xabc', token: 'jwt-token' },
   })),
   registerOwner: vi.fn(async () => ({
     ownerId: 'own_1',
