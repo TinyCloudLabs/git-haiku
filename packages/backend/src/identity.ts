@@ -22,7 +22,7 @@ import { getDstackClient, shouldUseDstack } from './tee';
  *    The derived key material never leaves the TEE — it is produced fresh in the
  *    enclave on every boot and is tied to the app's measurement.
  *  - LOCAL/DEV: the key comes from GITHAIKU_BACKEND_PRIVATE_KEY (the dev/
- *    verification fallback so the live test + local tc-cli path still work).
+ *    verification fallback so the live test + local sdk path still work).
  */
 
 const BACKEND_KEY_PATH = 'githaiku/keys/backend';
@@ -67,7 +67,7 @@ export async function resolveBackendPrivateKey(): Promise<string> {
   const envKey = config.backendPrivateKey;
   if (!envKey) {
     throw new Error(
-      'GITHAIKU_BACKEND_PRIVATE_KEY is required for the tc-cli secrets provider ' +
+      'GITHAIKU_BACKEND_PRIVATE_KEY is required for the sdk secrets provider ' +
         'outside the TEE (it is the backend stable identity that owners delegate to). ' +
         'Set it, run inside a dstack TEE (GITHAIKU_TEE=1), or use GITHAIKU_SECRETS_PROVIDER=local.',
     );
@@ -83,8 +83,7 @@ export interface BackendIdentity {
   host: string;
   /**
    * The resolved backend private key (dstack-derived in-TEE, env in dev). The
-   * tc-cli secrets provider passes this to the `tc` binary as TC_PRIVATE_KEY so
-   * the delegated read uses the SAME identity that signed in here.
+   * stable identity that signs in here and that owners delegate to.
    */
   privateKey: string;
 }

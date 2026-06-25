@@ -16,7 +16,7 @@ import type { OwnerRecord } from './store';
  *
  * It runs the EXACT same stages for an owner:
  *   1. secrets  — read the owner's GITHUB_TOKEN via the secrets provider
- *      (tc-cli reads it under the owner's stored delegation).
+ *      (sdk reads it under the owner's stored delegation).
  *   2. github   — fetch bounded recent commit metadata.
  *   3. generate — render the haiku (RedPill or deterministic).
  * Then it builds the guarded success payload (proof attached).
@@ -79,7 +79,7 @@ export async function generateHaikuForOwner(
   owner: OwnerRecord,
   secrets: SecretsProvider,
 ): Promise<PipelineResult> {
-  // 1. secrets — read the owner's GITHUB_TOKEN (tc-cli: under their delegation).
+  // 1. secrets — read the owner's GITHUB_TOKEN (sdk: under their delegation).
   let githubToken: string | null;
   try {
     githubToken = (await secrets.getOwnerSecrets(owner)).githubToken;

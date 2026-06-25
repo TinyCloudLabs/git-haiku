@@ -133,7 +133,7 @@ export async function buildServer(): Promise<FastifyInstance> {
 
   // --- Server info (no auth): backend DID + the policy owners must delegate -
   app.get('/api/server-info', async (_request, reply) => {
-    if (secrets.kind !== 'tc-cli') {
+    if (secrets.kind !== 'sdk') {
       reply.code(404);
       return { error: 'not_found' };
     }
@@ -213,9 +213,9 @@ export async function buildServer(): Promise<FastifyInstance> {
 
   // --- Receive an owner's delegation (OWNER-AUTHENTICATED) -----------------
   app.post('/api/delegations', async (request, reply) => {
-    if (secrets.kind !== 'tc-cli') {
+    if (secrets.kind !== 'sdk') {
       reply.code(404);
-      return { error: 'delegations are only accepted under the tc-cli secrets provider' };
+      return { error: 'delegations are only accepted under the sdk secrets provider' };
     }
     const auth = await authenticate(request, reply);
     if (!auth) return;

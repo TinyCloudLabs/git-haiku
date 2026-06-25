@@ -1,30 +1,30 @@
-import { execFile } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { promisify } from 'node:util';
+import {
+  deserializeDelegation,
+  resolveSecretPath,
+  type InlineEncryptedEnvelope,
+  type PortableDelegation,
+  type TinyCloudNode,
+} from '@tinycloud/node-sdk';
 
 import { config } from './config';
 import { loadDelegation } from './delegation-store';
 import { getBackendIdentity } from './identity';
 import { GITHUB_TOKEN_SCOPE, SECRET_NAMES, type SecretName } from './policy';
 import type { OwnerRecord } from './store';
-import { ensureLocalTcProfile } from './tc-profile';
-
-const execFileAsync = promisify(execFile);
 
 /**
  * Secrets boundary.
  *
  * - LOCAL (default): the owner's GitHub token comes straight from the gitignored
  *   dev store. No TinyCloud node needed.
- * - TC-CLI: the real trust contract. The owner's GITHUB_TOKEN lives in TinyCloud
- *   Secrets; the backend reads it under the owner's delegation by invoking the
- *   real `tc` binary (`tc secrets get <NAME> --scope githaiku --delegation
- *   <file> --host <node> --json`). Secrets stay in memory — never written to
- *   disk (except the
- *   transient delegation file, deleted immediately) or logs.
+ * - SDK: the real trust contract. The owner's GITHUB_TOKEN lives in TinyCloud
+ *   Secrets; the backend reads it under the owner's stored delegation directly
+ *   via the node-SDK — the SAME mechanism the `listen` app uses on its server
+ *   (`backend/src/delegation-activation.ts` + `services/source-secret.ts`). The
+ *   backend applies the owner's serialized delegation through `useDelegation`,
+ *   does a KV `get` on the owner's scoped secret path, and decrypts the inline
+ *   envelope through the owner's encryption network. Secrets stay in memory —
+ *   never written to disk, never logged.
  *
  * The RedPill LLM key is backend-global config (env), NOT an owner secret, so it
  * is not part of this boundary.
@@ -53,121 +53,165 @@ const SECRET_FIELD: Record<SecretName, keyof OwnerSecrets> = {
   GITHUB_TOKEN: 'githubToken',
 };
 
-/**
- * Resolve the absolute path to the published `tc` binary. We resolve the CLI's
- * own entrypoint and run it with the current node — no global install needed.
- */
-function resolveTcEntry(): string {
-  const require = createRequire(import.meta.url);
-  // The package's bin is dist/index.js; main resolves to the same module dir.
-  const pkgJson = require.resolve('@tinycloud/cli/package.json');
-  const dir = pkgJson.slice(0, pkgJson.lastIndexOf('/'));
-  return join(dir, 'dist', 'index.js');
+/** The encryption service the node-SDK attaches to a TinyCloudNode. */
+interface EncryptionCapableNode {
+  encryption: {
+    decryptEnvelope(
+      envelope: InlineEncryptedEnvelope,
+      capabilityProof: { proofs: string[] },
+    ): Promise<
+      | { ok: true; data: Uint8Array }
+      | { ok: false; error: { code: string; message: string } }
+    >;
+  };
 }
 
 /**
  * REAL: read the owner's secrets from TinyCloud Secrets under their stored
- * delegation via the `tc` CLI. Fails LOUDLY if no node / delegation / key.
+ * delegation, directly via the node-SDK (listen-style). Fails LOUDLY if no
+ * delegation / KV miss / decrypt failure — never silent.
  */
-class TcCliSecretsProvider implements SecretsProvider {
-  readonly kind = 'tc-cli';
-  private readonly tcEntry = resolveTcEntry();
+class SdkSecretsProvider implements SecretsProvider {
+  readonly kind = 'sdk';
 
   async getOwnerSecrets(owner: OwnerRecord): Promise<OwnerSecrets> {
-    // The backend stable key: dstack-derived in-TEE, env in dev. Same identity
-    // that signed in and that owners delegated to.
-    const { privateKey } = await getBackendIdentity();
-
-    // CLI 0.7 authenticates the DELEGATE via a persisted LOCAL PROFILE, not the
-    // TC_PRIVATE_KEY env. Bootstrap one for the backend key in a HOME we control,
-    // and point the spawned `tc` at it. Memoized: written once per process.
-    const tcProfile = ensureLocalTcProfile(privateKey);
+    // The backend stable identity node: dstack-derived in-TEE, env in dev. The
+    // same did:pkh that signed in and that owners delegated to.
+    const { node } = await getBackendIdentity();
 
     const stored = await loadDelegation(owner.ownerId);
     if (!stored) {
       throw new Error(
-        `tc-cli provider: no stored delegation for owner ${owner.ownerId}. ` +
+        `sdk provider: no stored delegation for owner ${owner.ownerId}. ` +
           'The owner must POST /api/delegations first.',
       );
     }
 
-    // Write the delegation to a transient file (the only on-disk secret-adjacent
-    // artifact) under a 0700 temp dir, deleted in `finally`.
-    const dir = mkdtempSync(join(tmpdir(), 'githaiku-deleg-'));
-    const delegationFile = join(dir, 'delegation.json');
-    writeFileSync(delegationFile, stored.serialized, { encoding: 'utf8', mode: 0o600 });
-
+    let delegation: PortableDelegation;
     try {
-      const out: OwnerSecrets = { githubToken: null };
-      for (const name of SECRET_NAMES) {
-        out[SECRET_FIELD[name]] = await this.readSecret(name, delegationFile, privateKey, tcProfile);
-      }
-      return out;
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
+      delegation = deserializeDelegation(stored.serialized);
+    } catch (err) {
+      throw new Error(
+        `sdk provider: stored delegation for owner ${owner.ownerId} is not a ` +
+          `valid serialized PortableDelegation: ${String(err)}`,
+      );
     }
+
+    const out: OwnerSecrets = { githubToken: null };
+    for (const name of SECRET_NAMES) {
+      out[SECRET_FIELD[name]] = await this.readSecret(node, delegation, name);
+    }
+    return out;
   }
 
+  /**
+   * Read one secret under the owner's delegation. Ports listen
+   * `backend/src/delegation-activation.ts`:
+   *  - `activateResource` (re-scope `useDelegation` to the KV-get resource),
+   *  - `access.kv.get(secretKey, { raw: true, prefix: "" })`,
+   *  - `proofCid = access.restorable?.delegationCid ?? access.delegation.cid`,
+   *  - `node.encryption.decryptEnvelope(envelope, { proofs: [proofCid] })`,
+   *  - `parseSecretPayload` (`{ value }` JSON).
+   */
   private async readSecret(
+    node: TinyCloudNode,
+    delegation: PortableDelegation,
     name: SecretName,
-    delegationFile: string,
-    privateKey: string,
-    tcProfile: { home: string; profile: string },
   ): Promise<string> {
-    const { stdout } = await execFileAsync(
-      process.execPath,
-      [
-        this.tcEntry,
-        'secrets',
-        'get',
-        name,
-        // The secret is namespaced under the `githaiku` scope, resolving to
-        // vault/secrets/scoped/githaiku/<NAME> — the same path the owner
-        // delegated KV-get on (see policy.secretVaultPath).
-        '--scope',
-        GITHUB_TOKEN_SCOPE,
-        '--delegation',
-        delegationFile,
-        '--host',
-        config.nodeHost,
-        '--json',
-      ],
-      {
-        // Backend stable key in env, NOT argv (argv is world-readable via ps).
-        // HOME points the CLI's ProfileManager at our bootstrapped local profile
-        // so it authenticates the delegate via branch (A); TC_PRIVATE_KEY is kept
-        // (harmless). TC_HOME/TC_PROFILE set explicitly for the helpers that read
-        // them.
-        env: {
-          ...process.env,
-          TC_PRIVATE_KEY: privateKey,
-          HOME: tcProfile.home,
-          TC_HOME: tcProfile.home,
-          TC_PROFILE: tcProfile.profile,
-        },
-        maxBuffer: 1024 * 1024,
-      },
-    );
+    // The scoped vault path: vault/secrets/scoped/githaiku/<NAME>. Derived via
+    // the SDK so it matches the path the owner delegated KV-get on exactly.
+    const resolved = resolveSecretPath(name, { scope: GITHUB_TOKEN_SCOPE });
+    const secretKey = resolved.permissionPaths.vault;
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(stdout);
-    } catch {
-      throw new Error(`tc secrets get ${name}: non-JSON output`);
+    // Re-scope the delegation to the secret's KV-get resource (listen
+    // `activateResource`). The KV path must come from the secrets space.
+    const secretResource = (delegation.resources ?? []).find((resource) => {
+      const service = String(resource.service);
+      const isKv = service === 'tinycloud.kv' || service === 'kv';
+      const path = String(resource.path);
+      return isKv && (path === secretKey || secretKey.startsWith(`${path.replace(/\/$/, '')}/`));
+    });
+    if (!secretResource) {
+      throw new Error(`sdk provider: delegation does not grant KV get on ${secretKey}`);
     }
-    const value = (parsed as { value?: unknown }).value;
-    if (typeof value !== 'string') {
-      throw new Error(`tc secrets get ${name}: missing string value in output`);
+
+    const space =
+      typeof secretResource.space === 'string' && secretResource.space.startsWith('tinycloud:')
+        ? secretResource.space
+        : delegation.spaceId;
+
+    const access = await node.useDelegation({
+      ...delegation,
+      spaceId: space,
+      path: secretKey,
+      actions: ['tinycloud.kv/get'],
+      resources: [{ ...secretResource, space: secretResource.space ?? delegation.spaceId }],
+    });
+
+    // Fetch the encrypted envelope from the owner's scoped secret path.
+    const result = await access.kv.get<unknown>(secretKey, { raw: true, prefix: '' });
+    if (!result.ok) {
+      const message = result.error?.message ?? `failed to read ${secretKey}`;
+      throw new Error(`sdk provider: KV get ${name} failed: ${message}`);
     }
-    return value;
+
+    const envelope = parseEncryptedEnvelope((result.data as { data?: unknown } | undefined)?.data, name);
+
+    // The decrypt proof is the delegation chain CID (listen).
+    const proofCid = access.restorable?.delegationCid ?? access.delegation.cid;
+    if (!proofCid) {
+      throw new Error(`sdk provider: no decrypt proof available for ${name}`);
+    }
+
+    const encryption = (node as unknown as EncryptionCapableNode).encryption;
+    if (!encryption) {
+      throw new Error('sdk provider: TinyCloud encryption service is not available');
+    }
+
+    const decrypted = await encryption.decryptEnvelope(envelope, { proofs: [proofCid] });
+    if (!decrypted.ok) {
+      throw new Error(`sdk provider: decrypt ${name} failed: ${decrypted.error.message}`);
+    }
+
+    return parseSecretPayload(decrypted.data, name);
   }
+}
+
+/** Parse the inline encrypted envelope JSON read from KV (listen). */
+function parseEncryptedEnvelope(rawEnvelope: unknown, name: SecretName): InlineEncryptedEnvelope {
+  const parsed = typeof rawEnvelope === 'string' ? JSON.parse(rawEnvelope) : rawEnvelope;
+  if (
+    typeof parsed !== 'object' ||
+    parsed === null ||
+    typeof (parsed as Partial<InlineEncryptedEnvelope>).v !== 'number' ||
+    typeof (parsed as Partial<InlineEncryptedEnvelope>).networkId !== 'string' ||
+    typeof (parsed as Partial<InlineEncryptedEnvelope>).ciphertext !== 'string' ||
+    typeof (parsed as Partial<InlineEncryptedEnvelope>).encryptedSymmetricKey !== 'string'
+  ) {
+    throw new Error(`sdk provider: secret ${name} did not contain an encrypted envelope`);
+  }
+  return parsed as InlineEncryptedEnvelope;
+}
+
+/** Parse the decrypted `{ value }` JSON payload (listen `parseSecretPayload`). */
+function parseSecretPayload(plaintext: Uint8Array, name: SecretName): string {
+  let parsed: { value?: unknown };
+  try {
+    parsed = JSON.parse(new TextDecoder().decode(plaintext)) as { value?: unknown };
+  } catch {
+    throw new Error(`sdk provider: secret ${name} did not contain valid JSON`);
+  }
+  if (typeof parsed.value !== 'string') {
+    throw new Error(`sdk provider: secret ${name} did not contain a string value`);
+  }
+  return parsed.value;
 }
 
 export function makeSecretsProvider(): SecretsProvider {
   switch (config.secretsProvider) {
     case 'local':
       return new LocalSecretsProvider();
-    case 'tc-cli':
-      return new TcCliSecretsProvider();
+    case 'sdk':
+      return new SdkSecretsProvider();
   }
 }

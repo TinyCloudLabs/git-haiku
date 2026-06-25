@@ -14,7 +14,7 @@ import { getBackendIdentity, withSessionRefresh } from './identity';
  * GitHub tokens, commit messages, or any raw commit data — the same egress
  * discipline as the haiku response itself.
  *
- *  - tc-cli / TEE: persisted in the backend's OWN TinyCloud KV space under
+ *  - sdk / TEE: persisted in the backend's OWN TinyCloud KV space under
  *    `audit/<ownerId>/<timestamp>-<rand>` so each entry is an immutable key
  *    (append-only; we never overwrite or delete). Lifted from listen's KV usage.
  *  - local (dev): appended to a gitignored JSONL file under config.dataDir.
@@ -97,7 +97,7 @@ function rememberInvalidAuditWindow(key: string, expiresAt: number): void {
 }
 
 function useKv(): boolean {
-  return config.secretsProvider === 'tc-cli';
+  return config.secretsProvider === 'sdk';
 }
 
 /** Defensive: ensure no obvious secret/commit fields ever land in an entry. */

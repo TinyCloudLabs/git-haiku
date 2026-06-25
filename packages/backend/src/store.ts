@@ -9,7 +9,7 @@ import { config } from './config';
  *
  * This is intentional, labeled dev behavior — NOT the real trust contract. In
  * production an owner's GitHub token lives in TinyCloud Secrets and is read by
- * the TEE under a delegation (GITHAIKU_SECRETS_PROVIDER=tc-cli). For the local
+ * the TEE under a delegation (GITHAIKU_SECRETS_PROVIDER=sdk). For the local
  * preview we persist it to a gitignored JSON file so the flow works end-to-end
  * with no infra.
  *

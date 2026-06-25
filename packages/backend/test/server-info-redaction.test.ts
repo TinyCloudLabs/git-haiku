@@ -10,7 +10,7 @@ const identityMock = vi.hoisted(() => ({
 
 process.env.GITHAIKU_DATA_DIR = mkdtempSync(join(tmpdir(), 'githaiku-server-info-test-'));
 process.env.GITHAIKU_HAIKU_GENERATOR = 'deterministic';
-process.env.GITHAIKU_SECRETS_PROVIDER = 'tc-cli';
+process.env.GITHAIKU_SECRETS_PROVIDER = 'sdk';
 
 vi.mock('../src/attestation', () => ({
   verifyTeeStartup: vi.fn(async () => {}),
@@ -38,7 +38,7 @@ afterAll(async () => {
 });
 
 describe('GET /api/server-info redaction', () => {
-  it('redacts tc-cli backend identity failures from unauthenticated clients', async () => {
+  it('redacts sdk backend identity failures from unauthenticated clients', async () => {
     const raw = 'TinyCloud signIn failed: backend private key leaked at /var/run/tinycloud.sock';
     identityMock.getBackendIdentity.mockRejectedValueOnce(new Error(raw));
 
