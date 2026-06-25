@@ -123,6 +123,9 @@ export async function buildServer(): Promise<FastifyInstance> {
       const { token, expiresIn } = await issueSessionToken(address, privateKey);
       return { token, expiresIn, address };
     } catch (err) {
+      // Log the real reason server-side (safe in the TEE) — pinpoints a true
+      // signature/address mismatch vs a parse/recovery failure.
+      request.log.warn({ err, url: request.url }, 'auth verify failed');
       reply.code(401);
       return {
         error: 'verification_failed',

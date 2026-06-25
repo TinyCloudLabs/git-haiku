@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { SignJWT, jwtVerify } from 'jose';
+import { getAddress, recoverMessageAddress, type Hex } from 'viem';
 
 /**
  * Owner authentication — single-signature SIWE → backend session JWT.
@@ -85,28 +86,51 @@ export class AuthError extends Error {}
 // ── SIWE verification ────────────────────────────────────────────────
 
 /**
- * Verify a SIWE message + signature with the `siwe` package. Returns the
- * recovered address and the nonce embedded in the message (so the caller can
- * validate it against the address-bound nonce store). Same lib + shape as listen.
+ * Verify a SIWE message + signature and return the signer address + the nonce
+ * embedded in the message.
+ *
+ * We do NOT use `siwe`'s `verify()` for the signature: it re-prepares the
+ * message (`prepareMessage`) before hashing, so it only succeeds when the
+ * backend's `siwe` version serializes byte-identically to whatever produced the
+ * signed message. The web-sdk (2.4.0-beta.16) emits a recap SIWE message that
+ * does NOT round-trip through `siwe@2.3.2`, so `verify()` recovers the wrong
+ * address and fails. Instead we recover the signer from the EXACT signed bytes
+ * (`message`) via EIP-191 personal_sign recovery — the same primitive OpenKey
+ * signs with (proven by the prior per-request auth) — and use `siwe` only to
+ * PARSE the address + nonce out of the message. This is version-independent.
  */
 export async function verifySIWE(
   message: string,
   signature: string,
 ): Promise<{ address: string; nonce: string }> {
   const { SiweMessage } = await import('siwe');
-  const siweMessage = new SiweMessage(message);
-  // `siwe` rejects (not resolves) on a bad/malformed signature, with a result
-  // object — normalize every failure into an AuthError.
-  let result;
+  // Parse fields only (no re-prepare). Throws on a truly malformed message.
+  let parsed: InstanceType<typeof SiweMessage>;
   try {
-    result = await siweMessage.verify({ signature });
+    parsed = new SiweMessage(message);
+  } catch (err) {
+    throw new AuthError(`SIWE message parse failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  let claimed: string;
+  try {
+    claimed = getAddress(parsed.address);
   } catch {
-    throw new AuthError('SIWE signature verification failed');
+    throw new AuthError('SIWE message has an invalid address');
   }
-  if (!result.success) {
-    throw new AuthError('SIWE signature verification failed');
+
+  let recovered: string;
+  try {
+    recovered = await recoverMessageAddress({ message, signature: signature as Hex });
+  } catch (err) {
+    throw new AuthError(`SIWE signature recovery failed: ${err instanceof Error ? err.message : String(err)}`);
   }
-  return { address: result.data.address, nonce: result.data.nonce };
+  if (getAddress(recovered) !== claimed) {
+    // Detailed (logged server-side) — recovered vs expected pinpoints a real mismatch.
+    throw new AuthError(
+      `SIWE signature does not match message address (recovered ${recovered}, expected ${claimed})`,
+    );
+  }
+  return { address: claimed, nonce: parsed.nonce };
 }
 
 // ── Session token (HS256 JWT) ────────────────────────────────────────
