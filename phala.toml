@@ -1,8 +1,8 @@
 name = "git-haiku-prod"
 profile = "tinycloudxyz"
 compose_file = "docker-compose.phala.yml"
-cvm_id = "d36b4604-b790-4be9-bae1-210df7eda4d3"
-app_id = "08c2dd3059bd151932a5c69e88f56dcd7b3a964f"
+cvm_id = "54bab69d-dbb5-40eb-bdcf-caee2a27f2c5"
+app_id = "f31b08e8c8fd86434ccd85b2e8260a1e7830303c"
 gateway_domain = "api.githaiku.com"
 gateway_port = 8787
 public_logs = true
