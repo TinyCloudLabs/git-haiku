@@ -10,6 +10,7 @@ import { loadDelegation } from './delegation-store';
 import { getBackendIdentity } from './identity';
 import { GITHUB_TOKEN_SCOPE, SECRET_NAMES, type SecretName } from './policy';
 import type { OwnerRecord } from './store';
+import { ensureLocalTcProfile } from './tc-profile';
 
 const execFileAsync = promisify(execFile);
 
@@ -77,6 +78,11 @@ class TcCliSecretsProvider implements SecretsProvider {
     // that signed in and that owners delegated to.
     const { privateKey } = await getBackendIdentity();
 
+    // CLI 0.7 authenticates the DELEGATE via a persisted LOCAL PROFILE, not the
+    // TC_PRIVATE_KEY env. Bootstrap one for the backend key in a HOME we control,
+    // and point the spawned `tc` at it. Memoized: written once per process.
+    const tcProfile = ensureLocalTcProfile(privateKey);
+
     const stored = await loadDelegation(owner.ownerId);
     if (!stored) {
       throw new Error(
@@ -94,7 +100,7 @@ class TcCliSecretsProvider implements SecretsProvider {
     try {
       const out: OwnerSecrets = { githubToken: null };
       for (const name of SECRET_NAMES) {
-        out[SECRET_FIELD[name]] = await this.readSecret(name, delegationFile, privateKey);
+        out[SECRET_FIELD[name]] = await this.readSecret(name, delegationFile, privateKey, tcProfile);
       }
       return out;
     } finally {
@@ -106,6 +112,7 @@ class TcCliSecretsProvider implements SecretsProvider {
     name: SecretName,
     delegationFile: string,
     privateKey: string,
+    tcProfile: { home: string; profile: string },
   ): Promise<string> {
     const { stdout } = await execFileAsync(
       process.execPath,
@@ -127,7 +134,17 @@ class TcCliSecretsProvider implements SecretsProvider {
       ],
       {
         // Backend stable key in env, NOT argv (argv is world-readable via ps).
-        env: { ...process.env, TC_PRIVATE_KEY: privateKey },
+        // HOME points the CLI's ProfileManager at our bootstrapped local profile
+        // so it authenticates the delegate via branch (A); TC_PRIVATE_KEY is kept
+        // (harmless). TC_HOME/TC_PROFILE set explicitly for the helpers that read
+        // them.
+        env: {
+          ...process.env,
+          TC_PRIVATE_KEY: privateKey,
+          HOME: tcProfile.home,
+          TC_HOME: tcProfile.home,
+          TC_PROFILE: tcProfile.profile,
+        },
         maxBuffer: 1024 * 1024,
       },
     );

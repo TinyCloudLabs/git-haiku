@@ -27,7 +27,8 @@ vi.mock('node:child_process', () => ({
 vi.mock('../src/identity', () => ({
   getBackendIdentity: vi.fn(async () => ({
     did: 'did:pkh:eip155:1:0x2222222222222222222222222222222222222222',
-    privateKey: '0xabc',
+    // A real 32-byte key: the tc-profile helper derives the address from it.
+    privateKey: '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d',
   })),
 }));
 
