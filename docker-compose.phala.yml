@@ -12,7 +12,10 @@ services:
       # socket. GITHAIKU_BACKEND_PRIVATE_KEY is intentionally NOT set here — the
       # key is derived inside the enclave and never leaves it.
       GITHAIKU_TEE: "1"
-      GITHAIKU_SECRETS_PROVIDER: "tc-cli"
+      GITHAIKU_SECRETS_PROVIDER: "sdk"
+      # Persist owner records + the delegation store on a named volume so they
+      # survive redeploys (the container rootfs is ephemeral).
+      GITHAIKU_DATA_DIR: /data
       GITHAIKU_NODE_HOST: ${GITHAIKU_NODE_HOST:-https://tee.node.tinycloud.xyz}
       GITHAIKU_PUBLIC_URL: ${GITHAIKU_PUBLIC_URL:-https://api.githaiku.com}
       GITHAIKU_ALLOWED_ORIGINS: ${GITHAIKU_ALLOWED_ORIGINS:-https://githaiku.com,https://www.githaiku.com}
@@ -27,6 +30,8 @@ services:
     volumes:
       # Required for dstack key derivation + TDX attestation.
       - /var/run/dstack.sock:/var/run/dstack.sock:ro
+      # Owner/delegation app state — survives redeploys (mirrors cert-data).
+      - githaiku-data:/data
     restart: unless-stopped
 
   dstack-ingress:
@@ -54,3 +59,4 @@ services:
 
 volumes:
   cert-data:
+  githaiku-data:
