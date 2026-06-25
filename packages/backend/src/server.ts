@@ -3,12 +3,19 @@ import { type EgressPayload, serializeGuardedResponse } from '@githaiku/shared';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 
 import { getAttestation, verifyTeeStartup } from './attestation';
-import { AuthError, nonceStore, verifyOwnerAuth, type OwnerAuth } from './auth';
+import {
+  AuthError,
+  issueSessionToken,
+  nonceStore,
+  verifySessionToken,
+  verifySIWE,
+  type OwnerAuth,
+} from './auth';
 import { readAudit, recordAudit, recordInvalidCodeAudit } from './audit';
 import { config } from './config';
 import { storeDelegation } from './delegation-store';
 import { validateDelegation } from './delegations';
-import { getBackendIdentity } from './identity';
+import { getBackendIdentity, resolveBackendPrivateKey } from './identity';
 import { generateHaikuForOwner } from './pipeline';
 import { backendPolicy, ownerDidFromAddress } from './policy';
 import {
@@ -37,8 +44,11 @@ import {
  * (sanitize -> validate -> serialize). Denials and errors carry no commit data.
  *
  * Owner-scoped endpoints (/api/owner, /api/delegations, /api/codes/*,
- * /api/audit) are OWNER-AUTHENTICATED via a SIWE-style signature (see auth.ts).
- * Public: /health, /attestation, /api/server-info, /api/auth/nonce, /api/haiku.
+ * /api/audit) are OWNER-AUTHENTICATED via a backend session JWT, established
+ * from the single web-sdk SIWE sign-in signature (see auth.ts). Authed requests
+ * carry `Authorization: Bearer <jwt>`.
+ * Public: /health, /attestation, /api/server-info, /api/auth/nonce,
+ * /api/auth/verify, /api/haiku.
  */
 export async function buildServer(): Promise<FastifyInstance> {
   await verifyTeeStartup();
@@ -80,8 +90,46 @@ export async function buildServer(): Promise<FastifyInstance> {
     }
   });
 
-  // --- Auth nonce (public): owner GETs a one-time nonce to sign ------------
-  app.get('/api/auth/nonce', async () => ({ nonce: nonceStore.issue() }));
+  // --- Auth nonce (public): owner GETs a one-time, address-bound nonce -----
+  // The web-sdk embeds this nonce in the SIWE message it asks the owner to sign.
+  app.get('/api/auth/nonce', async (request, reply) => {
+    const address = (request.query as { address?: unknown }).address;
+    if (typeof address !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(address)) {
+      reply.code(400);
+      return { error: 'invalid_address', message: "query parameter 'address' must be an Ethereum address" };
+    }
+    return { nonce: nonceStore.issue(address) };
+  });
+
+  // --- Auth verify (public): SIWE sign-in signature -> backend session JWT --
+  // The owner's single web-sdk SIWE signature is sent here. We verify it,
+  // validate the embedded address-bound nonce (single-use replay protection),
+  // and issue a JWT signed with the backend's stable key. No re-signing after.
+  app.post('/api/auth/verify', async (request, reply) => {
+    const body = (request.body ?? {}) as { message?: unknown; signature?: unknown };
+    const message = typeof body.message === 'string' ? body.message : '';
+    const signature = typeof body.signature === 'string' ? body.signature : '';
+    if (!message || !signature) {
+      reply.code(400);
+      return { error: 'invalid_request', message: 'message and signature are required' };
+    }
+    try {
+      const { address, nonce } = await verifySIWE(message, signature);
+      if (!nonceStore.validate(address, nonce)) {
+        reply.code(401);
+        return { error: 'invalid_nonce', message: 'nonce is invalid, expired, or already used' };
+      }
+      const privateKey = await resolveBackendPrivateKey();
+      const { token, expiresIn } = await issueSessionToken(address, privateKey);
+      return { token, expiresIn, address };
+    } catch (err) {
+      reply.code(401);
+      return {
+        error: 'verification_failed',
+        message: err instanceof AuthError ? err.message : 'SIWE verification failed',
+      };
+    }
+  });
 
   // --- Server info (no auth): backend DID + the policy owners must delegate -
   app.get('/api/server-info', async (_request, reply) => {
@@ -378,18 +426,23 @@ function redactedStatusCode(error: unknown): number {
 }
 
 /**
- * Verify the owner-auth payload on a request; replies 401 + returns null on
- * failure. Auth is carried in headers (works uniformly for GET + POST):
- *   x-githaiku-address, x-githaiku-nonce, x-githaiku-signature.
+ * Verify the backend session JWT on a request; replies 401 + returns null on
+ * failure. Auth is carried in the `Authorization: Bearer <jwt>` header (works
+ * uniformly for GET + POST). The JWT was issued at /api/auth/verify from the
+ * owner's single SIWE sign-in signature — no per-request signing.
  */
 async function authenticate(request: FastifyRequest, reply: FastifyReply): Promise<OwnerAuth | null> {
-  const h = request.headers;
+  const header = request.headers.authorization;
+  const token =
+    typeof header === 'string' ? (header.startsWith('Bearer ') ? header.slice(7) : header) : '';
+  if (!token) {
+    reply.code(401);
+    reply.send({ error: 'unauthenticated', message: 'Authorization bearer token is required' });
+    return null;
+  }
   try {
-    return await verifyOwnerAuth({
-      address: h['x-githaiku-address'],
-      nonce: h['x-githaiku-nonce'],
-      signature: h['x-githaiku-signature'],
-    });
+    const privateKey = await resolveBackendPrivateKey();
+    return await verifySessionToken(token, privateKey);
   } catch (err) {
     reply.code(401);
     reply.send({ error: 'unauthenticated', message: err instanceof AuthError ? err.message : 'authentication failed' });

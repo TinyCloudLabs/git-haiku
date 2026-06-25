@@ -177,7 +177,6 @@ async function main(): Promise<void> {
     // --- Backend server: create owner, deliver delegation, run haiku -----
     const { buildServer } = await import('../src/server');
     const { createOwner } = await import('../src/store');
-    const { buildAuthMessage } = await import('../src/auth');
     const app = await buildServer();
     await app.ready();
 
@@ -191,17 +190,37 @@ async function main(): Promise<void> {
     const info = await app.inject({ method: 'GET', url: '/api/server-info' });
     log(`server-info: ${info.body}`);
 
-    // The owner signs a SIWE-style auth payload (proves control of the address).
+    // The owner signs in ONCE with a SIWE message embedding the address-bound
+    // nonce; /api/auth/verify returns a session JWT used as a bearer token.
     const { privateKeyToAccount } = await import('viem/accounts');
+    const { SiweMessage } = await import('siwe');
     const ownerAcct = privateKeyToAccount(OWNER_KEY as `0x${string}`);
-    const nonceRes = await app.inject({ method: 'GET', url: '/api/auth/nonce' });
+    const nonceRes = await app.inject({
+      method: 'GET',
+      url: `/api/auth/nonce?address=${ownerAcct.address}`,
+    });
     const { nonce } = JSON.parse(nonceRes.body) as { nonce: string };
-    const signature = await ownerAcct.signMessage({ message: buildAuthMessage(nonce) });
-    const authHeaders = {
-      'x-githaiku-address': ownerAcct.address,
-      'x-githaiku-nonce': nonce,
-      'x-githaiku-signature': signature,
-    };
+    const siweMessage = new SiweMessage({
+      domain: 'localhost',
+      address: ownerAcct.address,
+      statement: 'Git Haiku owner sign-in',
+      uri: 'http://localhost',
+      version: '1',
+      chainId: 1,
+      nonce,
+      issuedAt: new Date().toISOString(),
+    }).prepareMessage();
+    const signature = await ownerAcct.signMessage({ message: siweMessage });
+    const verifyRes = await app.inject({
+      method: 'POST',
+      url: '/api/auth/verify',
+      payload: { message: siweMessage, signature },
+    });
+    if (verifyRes.statusCode !== 200) {
+      throw new Error(`POST /api/auth/verify failed: ${verifyRes.statusCode} ${verifyRes.body}`);
+    }
+    const { token } = JSON.parse(verifyRes.body) as { token: string };
+    const authHeaders = { authorization: `Bearer ${token}` };
 
     // POST the delegation (owner-authenticated via headers).
     const delRes = await app.inject({
