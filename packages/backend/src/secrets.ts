@@ -106,8 +106,10 @@ class SdkSecretsProvider implements SecretsProvider {
 
   /**
    * Read one secret under the owner's delegation. Ports listen
-   * `backend/src/delegation-activation.ts`:
-   *  - `activateResource` (re-scope `useDelegation` to the KV-get resource),
+   * `backend/src/delegation-activation.ts` (single-delegation path,
+   * `activatePortableDelegation` -> `node.useDelegation(delegations[0])`):
+   *  - activate the WHOLE delegation (carries BOTH the KV-get and the
+   *    encryption/decrypt resources) — NOT a KV-only re-scope,
    *  - `access.kv.get(secretKey, { raw: true, prefix: "" })`,
    *  - `proofCid = access.restorable?.delegationCid ?? access.delegation.cid`,
    *  - `node.encryption.decryptEnvelope(envelope, { proofs: [proofCid] })`,
@@ -123,8 +125,8 @@ class SdkSecretsProvider implements SecretsProvider {
     const resolved = resolveSecretPath(name, { scope: GITHUB_TOKEN_SCOPE });
     const secretKey = resolved.permissionPaths.vault;
 
-    // Re-scope the delegation to the secret's KV-get resource (listen
-    // `activateResource`). The KV path must come from the secrets space.
+    // Precondition: the delegation must grant KV-get on the secret path. This is
+    // a guard only — it does NOT re-scope the activation.
     const secretResource = (delegation.resources ?? []).find((resource) => {
       const service = String(resource.service);
       const isKv = service === 'tinycloud.kv' || service === 'kv';
@@ -135,18 +137,15 @@ class SdkSecretsProvider implements SecretsProvider {
       throw new Error(`sdk provider: delegation does not grant KV get on ${secretKey}`);
     }
 
-    const space =
-      typeof secretResource.space === 'string' && secretResource.space.startsWith('tinycloud:')
-        ? secretResource.space
-        : delegation.spaceId;
-
-    const access = await node.useDelegation({
-      ...delegation,
-      spaceId: space,
-      path: secretKey,
-      actions: ['tinycloud.kv/get'],
-      resources: [{ ...secretResource, space: secretResource.space ?? delegation.spaceId }],
-    });
+    // Activate the WHOLE delegation. `useDelegation` reconstructs every granted
+    // resource via `buildActivationAbilities`: the KV-get resource into the
+    // space-scoped abilities AND the encryption-network resource into the
+    // raw (space-independent) abilities. The minted activation sub-delegation
+    // therefore carries BOTH `tinycloud.kv/get` AND `tinycloud.encryption/
+    // decrypt`, so its `delegationCid` is a valid decrypt proof. Narrowing
+    // `resources` to KV-only (the previous code) produced an activation that
+    // carried no decrypt capability -> "Unauthorized Action" at decryptEnvelope.
+    const access = await node.useDelegation(delegation);
 
     // Fetch the encrypted envelope from the owner's scoped secret path.
     const result = await access.kv.get<unknown>(secretKey, { raw: true, prefix: '' });

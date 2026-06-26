@@ -127,14 +127,22 @@ describe('sdk SecretsProvider reads the scoped secret under the delegation', () 
 
     expect(secrets.githubToken).toBe(SECRET_VALUE);
 
-    // Applied the owner's delegation, re-scoped to the secret's KV-get resource.
+    // Applied the WHOLE owner delegation (NOT narrowed to KV-only). The
+    // activation must carry BOTH the KV-get resource AND the encryption/decrypt
+    // resource, otherwise the minted activation sub-delegation cannot satisfy
+    // the decryptEnvelope proof ("Unauthorized Action").
     expect(node.useDelegation).toHaveBeenCalledTimes(1);
     const delegationArg = node.useDelegation.mock.calls[0][0] as unknown as {
-      path: string;
-      actions: string[];
+      resources: Array<{ service: string; actions: string[] }>;
     };
-    expect(delegationArg.path).toBe(SCOPED_PATH);
-    expect(delegationArg.actions).toEqual(['tinycloud.kv/get']);
+    expect(delegationArg).toBe(STORED_DELEGATION);
+    const services = delegationArg.resources.map((resource) => resource.service);
+    expect(services).toContain('tinycloud.kv');
+    expect(services).toContain('tinycloud.encryption');
+    const encryptionResource = delegationArg.resources.find(
+      (resource) => resource.service === 'tinycloud.encryption',
+    );
+    expect(encryptionResource?.actions).toEqual(['tinycloud.encryption/decrypt']);
 
     // KV-got the EXACT scoped vault path with raw bytes + no prefix.
     expect(kvGetCalls).toHaveLength(1);
