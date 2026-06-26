@@ -103,20 +103,29 @@ export async function verifySIWE(
   message: string,
   signature: string,
 ): Promise<{ address: string; nonce: string }> {
-  const { SiweMessage } = await import('siwe');
-  // Parse fields only (no re-prepare). Throws on a truly malformed message.
-  let parsed: InstanceType<typeof SiweMessage>;
-  try {
-    parsed = new SiweMessage(message);
-  } catch (err) {
-    throw new AuthError(`SIWE message parse failed: ${err instanceof Error ? err.message : String(err)}`);
-  }
+  // We parse the two EIP-4361 fields we need (the claimed address + the nonce)
+  // DIRECTLY from the message text, and verify the signature by EIP-191 recovery
+  // from the exact signed bytes. We deliberately do NOT use the `siwe` package:
+  // (1) its `verify()` re-prepares the message before hashing, which fails on the
+  // web-sdk's recap message (version-coupled), and (2) a dynamic `import('siwe')`
+  // does not expose `SiweMessage` as a constructor in the esbuild ESM bundle
+  // ("SiweMessage is not a constructor"). Manual parse + viem recovery is both
+  // version-independent and bundle-safe.
+  //
+  // EIP-4361 layout: line 0 = "<domain> wants you to sign in…:", line 1 = the
+  // address, and a "Nonce: <nonce>" line further down.
+  const lines = message.split('\n');
   let claimed: string;
   try {
-    claimed = getAddress(parsed.address);
+    claimed = getAddress((lines[1] ?? '').trim());
   } catch {
-    throw new AuthError('SIWE message has an invalid address');
+    throw new AuthError('SIWE message is missing a valid address on line 2');
   }
+  const nonceMatch = message.match(/^Nonce: (.+)$/m);
+  if (!nonceMatch || nonceMatch[1] === undefined) {
+    throw new AuthError('SIWE message is missing a Nonce line');
+  }
+  const nonce = nonceMatch[1].trim();
 
   let recovered: string;
   try {
@@ -130,7 +139,7 @@ export async function verifySIWE(
       `SIWE signature does not match message address (recovered ${recovered}, expected ${claimed})`,
     );
   }
-  return { address: claimed, nonce: parsed.nonce };
+  return { address: claimed, nonce };
 }
 
 // ── Session token (HS256 JWT) ────────────────────────────────────────
