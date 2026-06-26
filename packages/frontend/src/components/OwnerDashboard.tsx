@@ -89,8 +89,11 @@ export function OwnerDashboard({
       <div className="card">
         <h2>Owner dashboard</h2>
         <p className="muted">
-          Signed in as <code className="mono">{shortDid(did)}</code> · GitHub{' '}
-          <strong>{owner.githubLogin}</strong>
+          Signed in as{' '}
+          <code className="mono" data-testid="owner-address">
+            {shortDid(did)}
+          </code>{' '}
+          · GitHub <strong>{owner.githubLogin}</strong>
           {owner.hasGithubToken && (
             <>
               {' '}

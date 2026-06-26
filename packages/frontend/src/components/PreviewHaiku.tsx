@@ -38,16 +38,16 @@ export function PreviewHaiku({ auth }: { auth: OwnerAuthContext }) {
         Run the full pipeline once — read your stored token, fetch your recent GitHub activity, and
         generate a haiku — without minting or sharing a code.
       </p>
-      <button className="primary" onClick={() => void run()} disabled={busy}>
+      <button className="primary" data-testid="preview-run" onClick={() => void run()} disabled={busy}>
         {busy ? 'Generating…' : 'Preview / test haiku'}
       </button>
 
       {error && <div className="denial">{error}</div>}
 
       {result && result.allowed && (
-        <div className="haiku">
+        <div className="haiku" data-testid="haiku">
           {result.haiku.lines.map((line, i) => (
-            <p key={i} className="haiku-line">
+            <p key={i} className="haiku-line" data-testid="haiku-line">
               {line}
             </p>
           ))}

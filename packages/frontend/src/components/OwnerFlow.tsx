@@ -93,7 +93,7 @@ function SignInPhase({
         token in <strong>your own</strong> TinyCloud secrets vault, and delegate exactly one
         capability to the attested backend: read &amp; decrypt that one secret.
       </p>
-      <button className="primary" onClick={signIn} disabled={loading}>
+      <button className="primary" data-testid="owner-signin" onClick={signIn} disabled={loading}>
         {loading ? 'Connecting…' : 'Sign in with OpenKey'}
       </button>
       {error && <div className="denial">{error}</div>}
@@ -234,6 +234,7 @@ function SetupPhase({
           <span>GitHub login (whose commits the haiku describes)</span>
           <input
             className="input"
+            data-testid="setup-github-login"
             value={githubLogin}
             onChange={(e) => setGithubLogin(e.target.value)}
             placeholder="octocat"
@@ -243,6 +244,7 @@ function SetupPhase({
           <span>GitHub token (stored in YOUR vault, never sent to us in the clear)</span>
           <input
             className="input mono"
+            data-testid="setup-github-token"
             type="password"
             value={githubToken}
             onChange={(e) => onTokenChange(e.target.value)}
@@ -264,6 +266,7 @@ function SetupPhase({
         </label>
         <button
           className="primary"
+          data-testid="setup-authorize"
           disabled={busy || !githubLogin.trim() || !githubToken.trim() || tokenKnownInvalid}
         >
           {busy ? 'Working…' : 'Authorize & generate code'}
