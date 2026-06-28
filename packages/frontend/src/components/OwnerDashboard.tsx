@@ -22,10 +22,13 @@ export function OwnerDashboard({
   auth,
   owner,
   did,
+  onRestoreToken,
 }: {
   auth: OwnerAuthContext;
   owner: OwnerResult;
   did: string;
+  /** Switch to the setup phase to rotate/re-store the GitHub token (heavy recap). */
+  onRestoreToken: () => void;
 }) {
   const [codes, setCodes] = useState<CodeSummary[] | null>(null);
   const [audit, setAudit] = useState<AuditEntry[] | null>(null);
@@ -110,6 +113,14 @@ export function OwnerDashboard({
           </button>
           <button className="ghost" onClick={() => void refresh()} disabled={busy}>
             Refresh
+          </button>
+          <button
+            className="ghost"
+            data-testid="dashboard-restore-token"
+            onClick={onRestoreToken}
+            disabled={busy}
+          >
+            Rotate / re-store GitHub token
           </button>
         </div>
         {error && <div className="denial">{error}</div>}

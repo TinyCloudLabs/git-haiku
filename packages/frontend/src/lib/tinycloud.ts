@@ -11,7 +11,8 @@ import type { providers } from 'ethers';
 
 import { APP_MANIFEST, GITHUB_TOKEN_SCOPE } from './appManifest';
 import { TINYCLOUD_HOSTS } from './config';
-import type { ServerInfo, ServerInfoPermission } from '../api';
+import { getServerInfo, requestNonce, type ServerInfo, type ServerInfoPermission } from '../api';
+import type { OpenKeySession } from './openkey';
 
 /**
  * TinyCloud web-sdk wiring for the owner.
@@ -185,6 +186,42 @@ export async function createAndSignIn(
 }
 
 /**
+ * The heavy web-sdk recap, materialized lazily for the SETUP path only.
+ *
+ * A returning owner NEVER builds this — login is a single lightweight signature
+ * (see ownerSession.ts). Only a NEW owner (or one rotating/re-storing their
+ * token) runs this: it fetches `/api/server-info`, composes the app + backend
+ * manifests, and drives the full web-sdk `signIn()` (the recap-bearing wallet
+ * flow) using the SAME OpenKey provider already in hand. This is the ONE extra
+ * signature a new owner produces beyond login.
+ *
+ * Returns the live `tcw`, the composed request (for `materializeBackendDelegation`),
+ * and the backend DID — everything `SetupPhase` needs to put the token + delegate.
+ */
+export interface OwnerRecap {
+  tcw: TinyCloudWeb;
+  composedRequest: ComposedManifestRequest;
+  backendDid: string;
+}
+
+export async function setupOwnerRecap(openkey: OpenKeySession): Promise<OwnerRecap> {
+  const info = await getServerInfo();
+  const composedRequest = composeOwnerRequest(info, openkey.did);
+  // The recap sign-in also wants a fresh address-bound nonce embedded in its SIWE
+  // message (the login nonce was already burned by /api/auth/verify). The recap's
+  // backend-session value is unused here (the JWT is established at login), but
+  // the web-sdk requires a nonce for the SIWE message it signs.
+  const nonce = await requestNonce(openkey.address);
+  const { tcw } = await createAndSignIn(
+    openkey.web3Provider,
+    composedRequest,
+    openkey.address,
+    nonce,
+  );
+  return { tcw, composedRequest, backendDid: info.did };
+}
+
+/**
  * Write the owner's GitHub token into their TinyCloud Secrets vault under the
  * `githaiku` scope (`vault/secrets/scoped/githaiku/GITHUB_TOKEN`, encrypted via
  * their default network). Matches the scoped path the manifest declares + the
@@ -205,21 +242,6 @@ export async function putGithubToken(tcw: TinyCloudWeb, token: string): Promise<
   if (!result.ok) {
     throw new Error(result.error?.message ?? 'secrets.put failed');
   }
-}
-
-/**
- * Check whether the owner already has a GITHUB_TOKEN stored under the `githaiku`
- * scope, WITHOUT returning or logging the value. Returns true iff
- * `secrets.get` succeeds (token present + decryptable). A miss / error → false.
- *
- * Used by the returning-owner view to show "✓ token stored" instead of treating
- * the form as blank. The decrypted value is read into a local and immediately
- * discarded — it is never returned, rendered, or logged.
- */
-export async function hasGithubToken(tcw: TinyCloudWeb): Promise<boolean> {
-  await tcw.ensureOwnedSpaceHosted('secrets');
-  const result = await tcw.secrets.get('GITHUB_TOKEN', { scope: GITHUB_TOKEN_SCOPE });
-  return result.ok;
 }
 
 /**

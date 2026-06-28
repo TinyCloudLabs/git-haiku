@@ -10,50 +10,35 @@ import type { Locator, Page } from "@playwright/test";
  * Drives the FULL owner flow against the deployed app (https://githaiku.com →
  * live backend api.githaiku.com) with NO human and NO passkey: OpenKey's "or use
  * an external wallet" option is wired to a mock EIP-1193 / EIP-6963 wallet backed
- * by an ethers v5 Wallet. Every signature the flow needs (the SIWE recap that
- * establishes the TinyCloud session + the backend session, plus the secrets.put
- * and delegation signatures) is auto-signed by the mock wallet.
+ * by an ethers v5 Wallet. Every signature the flow needs is auto-signed by the
+ * mock wallet.
  *
- * Owner identity: by default a FRESH random wallet per run, so the flow always
- * exercises the full SETUP path (secrets.put → register → delegate) and mints a
- * fresh delegation — never reusing a prior owner's persisted (and possibly stale)
- * delegation on the backend's volume. Pin a specific owner with
- * GITHAIKU_E2E_PRIVATE_KEY (e.g. anvil #0
- * 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80) to drive
- * the returning-owner path instead.
- *
- * Flow:
- *   1. inject shadow-open + ethers UMD + mock wallet
- *   2. goto /owner → "Sign in with OpenKey"
- *   3. OpenKey iframe → "or use an external wallet" → pick the mock wallet
- *   4. fresh owner has no record → SETUP form (returning owner → dashboard)
- *   5. fill GitHub login + token (from .githaiku-dev/e2e.env), submit → secrets.put
- *      + register + delegate → dashboard
- *   6. Preview → assert an allowed 3-line haiku
- *   7. assert window.__walletRequests contains personal_sign
+ * Two scenarios:
+ *   1. FRESH owner (random wallet) — exercises the full SETUP path: lightweight
+ *      login signature → setup form → recap signature → secrets.put + register +
+ *      delegate → dashboard → preview. New owners pay TWO signatures (login +
+ *      setup recap).
+ *   2. RETURNING owner (FIXED anvil key) — proves the lightweight path: ONE login
+ *      signature lands DIRECTLY on the dashboard (no setup form, no token
+ *      re-upload). It mints a new code and previews a haiku using only the backend
+ *      JWT. The test self-bootstraps: if the fixed key has no owner record yet, it
+ *      runs setup once, then RELOADS and re-signs-in to assert the returning path.
  *
  * Mirrors secret-manager's openkey-wallet-secret-flow harness (the blessed
- * reference). The deployed git-haiku bundle predates the data-testids we add to
- * the components, so the git-haiku-side selectors are testid-OR-text resilient:
- * they use the committed testids when present and fall back to role/text against
- * the currently-deployed build. Only the OpenKey iframe is matched purely by text
- * (its DOM we don't control).
+ * reference). git-haiku-side selectors are testid-OR-text resilient (the deployed
+ * bundle may predate a given data-testid); only the OpenKey iframe is matched
+ * purely by text (its DOM we don't control).
  */
 
-// A fresh random owner each run (full setup path), unless pinned via env.
-const ownerWallet = process.env.GITHAIKU_E2E_PRIVATE_KEY
-  ? new Wallet(process.env.GITHAIKU_E2E_PRIVATE_KEY)
-  : Wallet.createRandom();
-const TEST_PRIVATE_KEY = ownerWallet.privateKey;
-const TEST_ADDRESS = ownerWallet.address;
-const TEST_WALLET_NAME = "TinyCloud Test Wallet";
-// Last 8 hex of the owner address — what the dashboard's shortened did:pkh ends
-// with (used as the no-testid fallback for the signed-in address display).
-const ADDRESS_SUFFIX = TEST_ADDRESS.slice(-8);
+// The fixed anvil key #0 — the RETURNING-owner identity. Stable across runs so a
+// prior run's setup persists, exercising the dashboard-direct login path.
+const ANVIL_KEY_0 = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 
 const ETHERS_UMD_PATH = fileURLToPath(
   new URL("../../node_modules/ethers/dist/ethers.umd.min.js", import.meta.url),
 );
+
+const TEST_WALLET_NAME = "TinyCloud Test Wallet";
 
 // ── Test inputs from the gitignored .githaiku-dev/e2e.env (NEVER printed) ──────
 function loadE2eEnv(): { githubLogin: string; githubToken: string } {
@@ -171,22 +156,40 @@ function mockBrowserWalletProvider() {
 }
 
 // ── testid-OR-text resilient locators for the git-haiku UI ─────────────────────
-// The deployed bundle predates the committed data-testids, so each git-haiku
-// selector prefers the testid (future deploys) and falls back to text/role
-// (current deploy). Whichever exists is what we click.
 
 function firstVisible(...locators: Locator[]): Locator {
   // `.or()` chains so Playwright resolves to whichever matches.
   return locators.reduce((acc, l) => acc.or(l));
 }
 
+function loginInputLoc(page: Page): Locator {
+  return firstVisible(page.getByTestId("setup-github-login"), page.getByPlaceholder("octocat"));
+}
+function tokenInputLoc(page: Page): Locator {
+  return firstVisible(page.getByTestId("setup-github-token"), page.getByPlaceholder("ghp_…"));
+}
+function previewButtonLoc(page: Page): Locator {
+  return firstVisible(
+    page.getByTestId("preview-run"),
+    page.getByRole("button", { name: /preview \/ test haiku/i }),
+  );
+}
+function authorizeButtonLoc(page: Page): Locator {
+  return firstVisible(
+    page.getByTestId("setup-authorize"),
+    page.getByRole("button", { name: /authorize & generate code/i }),
+  );
+}
+function haikuLinesLoc(page: Page): Locator {
+  return firstVisible(page.getByTestId("haiku-line"), page.locator(".haiku .haiku-line"));
+}
+
 /**
  * A first-time owner address has no TinyCloud space yet, so the web-sdk's
- * UserAuthorization shows a "Create Your TinyCloud Space" modal mid-sign-in (the
- * `ensureSpaceExists` step). A human clicks "Create TinyCloud Space"; here we
- * auto-click it whenever it surfaces. Runs as a detached background loop so it
- * also catches the modal if it re-appears during secrets.put. Best-effort: it
- * stops once the page closes.
+ * UserAuthorization shows a "Create Your TinyCloud Space" modal mid-recap (the
+ * `ensureSpaceExists` step). Auto-click it whenever it surfaces. Detached
+ * background loop so it also catches the modal if it re-appears during
+ * secrets.put. Best-effort: stops once the page closes.
  */
 function autoCreateSpaceOnModal(page: Page): void {
   const createButton = page.getByRole("button", { name: /create tinycloud space/i });
@@ -194,14 +197,35 @@ function autoCreateSpaceOnModal(page: Page): void {
     while (!page.isClosed()) {
       try {
         await createButton.click({ timeout: 5000 });
-        // Re-loop: there may be a second prompt; if not, the next click times out
-        // harmlessly and we keep polling.
       } catch {
-        // No modal visible right now — poll again shortly.
         await page.waitForTimeout(1000).catch(() => {});
       }
     }
   })();
+}
+
+async function installWallet(
+  page: Page,
+  wallet: { address: string; privateKey: string },
+): Promise<void> {
+  await page.addInitScript(exposeTestShadowRoots());
+  await page.addInitScript({ path: ETHERS_UMD_PATH });
+  await page.addInitScript(mockBrowserWalletProvider(), {
+    address: wallet.address,
+    privateKey: wallet.privateKey,
+    walletName: TEST_WALLET_NAME,
+  });
+}
+
+function logAppApiErrors(page: Page): void {
+  page.on("response", (res) => {
+    const url = res.url();
+    const status = res.status();
+    if (status < 400) return;
+    const isAppApi = url.includes("api.githaiku.com");
+    const isNodeServerError = url.includes("node.tinycloud.xyz") && status >= 500;
+    if (isAppApi || isNodeServerError) console.log(`[http ${status}] ${url}`);
+  });
 }
 
 async function signIn(page: Page): Promise<void> {
@@ -220,137 +244,212 @@ async function signIn(page: Page): Promise<void> {
   await page.getByText(TEST_WALLET_NAME).click();
 }
 
-test("owner signs in with an OpenKey external wallet and produces a haiku", async ({ page }) => {
+/**
+ * Run the SETUP form: fill login + token, submit, ride the bounded
+ * space-not-found retry loop, and converge on the dashboard. Bounded retries
+ * mirror a human re-clicking Authorize when the just-created space hasn't
+ * propagated to the live node yet.
+ */
+async function runSetup(
+  page: Page,
+  githubLogin: string,
+  githubToken: string,
+): Promise<void> {
+  await loginInputLoc(page).fill(githubLogin);
+  await tokenInputLoc(page).fill(githubToken);
+  const authorize = authorizeButtonLoc(page);
+  const previewButton = previewButtonLoc(page);
+  const denial = page.locator(".denial");
+  const spaceNotFound = denial.filter({ hasText: /space not found/i });
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    await authorize.click();
+    await expect(previewButton.or(spaceNotFound).first()).toBeVisible({ timeout: 90000 });
+    if (await previewButton.isVisible()) break;
+    if (await spaceNotFound.isVisible()) {
+      console.log(`[flow] space-not-found (attempt ${attempt}) — retrying authorize`);
+      await page.waitForTimeout(3000);
+    }
+  }
+}
+
+type PreviewOutcome = { ok: true; lines: string[] } | { ok: false; reason: string };
+
+/**
+ * Click Preview once and resolve to the 3-line haiku OR the on-page denial
+ * reason. Does NOT throw on denial — the caller decides (a stale stored token is
+ * recoverable via re-store; a generate-stage RedPill timeout is retryable).
+ */
+async function previewOnce(page: Page): Promise<PreviewOutcome> {
+  const previewButton = previewButtonLoc(page);
+  await previewButton.click();
+  const haikuLines = haikuLinesLoc(page);
+  const previewDenial = page.locator(".card", { has: previewButton }).locator(".denial");
+  await expect(haikuLines.first().or(previewDenial)).toBeVisible({ timeout: 180000 });
+  if (await previewDenial.isVisible()) {
+    return { ok: false, reason: (await previewDenial.innerText()).trim() };
+  }
+  await expect(haikuLines).toHaveCount(3);
+  const lines = await haikuLines.allInnerTexts();
+  expect(lines.filter((l) => l.trim().length > 0)).toHaveLength(3);
+  return { ok: true, lines };
+}
+
+/**
+ * Run Preview and assert a 3-line haiku. Retries a transient generate-stage
+ * failure (the prod RedPill LLM gateway intermittently times out — an upstream
+ * latency issue, not a flow bug) a bounded number of times before failing with
+ * the actionable on-page reason.
+ */
+async function previewHaiku(page: Page): Promise<string[]> {
+  let lastReason = "";
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const outcome = await previewOnce(page);
+    if (outcome.ok) return outcome.lines;
+    lastReason = outcome.reason;
+    const transient = /try again|generate the haiku/i.test(outcome.reason);
+    if (!transient) break;
+    console.log(`[flow] preview generate-stage retry (attempt ${attempt}): "${outcome.reason}"`);
+    await page.waitForTimeout(4000);
+  }
+  throw new Error(
+    `Preview did not produce a haiku — backend denied at the preview stage: "${lastReason}". ` +
+      `Check the backend logs (phala cvms logs <git-haiku-prod> -c dstack-githaiku-backend-1).`,
+  );
+}
+
+// ── Scenario 1: FRESH owner → full setup path ──────────────────────────────────
+
+test("fresh owner signs in, sets up, and produces a haiku", async ({ page }) => {
   const { githubLogin, githubToken } = loadE2eEnv();
+  const owner = Wallet.createRandom();
+  const addressSuffix = owner.address.slice(-8);
 
-  // Surface backend/API failures (never the token). Node capability probes 404
-  // as a normal part of the flow, so only log app-API (githaiku.com) errors and
-  // node 5xx — the signal we care about when diagnosing a failed run.
-  page.on("response", (res) => {
-    const url = res.url();
-    const status = res.status();
-    if (status < 400) return;
-    const isAppApi = url.includes("api.githaiku.com");
-    const isNodeServerError = url.includes("node.tinycloud.xyz") && status >= 500;
-    if (isAppApi || isNodeServerError) console.log(`[http ${status}] ${url}`);
-  });
-
-  await page.addInitScript(exposeTestShadowRoots());
-  await page.addInitScript({ path: ETHERS_UMD_PATH });
-  await page.addInitScript(mockBrowserWalletProvider(), {
-    address: TEST_ADDRESS,
-    privateKey: TEST_PRIVATE_KEY,
-    walletName: TEST_WALLET_NAME,
-  });
-
-  // First-time owner: auto-click the web-sdk "Create TinyCloud Space" modal
-  // whenever it appears (the human-clicked space-creation step).
+  logAppApiErrors(page);
+  await installWallet(page, owner);
   autoCreateSpaceOnModal(page);
 
   // ── PART 1: land on the owner view and sign in via the external wallet ──────
   await page.goto("/owner");
   await signIn(page);
 
-  // ── PART 2: route after sign-in ─────────────────────────────────────────────
-  // A FRESH anvil-key owner has no backend record (getOwner → 404) and lands on
-  // the SETUP form. A RETURNING owner (this same anvil key already registered in
-  // a prior run) routes straight to the DASHBOARD. The test handles both: it
-  // races the setup form against the dashboard's Preview button and only runs
-  // setup when the form actually appears. Either path converges on the dashboard.
-  const loginInput = firstVisible(
-    page.getByTestId("setup-github-login"),
-    page.getByPlaceholder("octocat"),
-  );
-  const tokenInput = firstVisible(
-    page.getByTestId("setup-github-token"),
-    page.getByPlaceholder("ghp_…"),
-  );
-  const previewButton = firstVisible(
-    page.getByTestId("preview-run"),
-    page.getByRole("button", { name: /preview \/ test haiku/i }),
-  );
+  // ── PART 2: a fresh owner has no record → SETUP form ────────────────────────
+  await expect(loginInputLoc(page)).toBeVisible({ timeout: 120000 });
+  console.log("[flow] fresh owner → setup form");
 
-  // Wait for whichever view rendered after sign-in.
-  await expect(loginInput.or(previewButton).first()).toBeVisible({ timeout: 120000 });
+  // ── PART 3: authorize (recap sig) → secrets.put + register + delegate ───────
+  await runSetup(page, githubLogin, githubToken);
 
-  const onSetup = await loginInput.isVisible();
-  if (onSetup) {
-    console.log("[flow] fresh owner → setup form");
-    // ── PART 3: authorize → secrets.put + register + delegate → dashboard ─────
-    await loginInput.fill(githubLogin);
-    await tokenInput.fill(githubToken);
-    const authorize = firstVisible(
-      page.getByTestId("setup-authorize"),
-      page.getByRole("button", { name: /authorize & generate code/i }),
-    );
-
-    // First-time owners provision their TinyCloud `secrets` space during this
-    // step. The owned-space activation can lose a race with the just-created
-    // space's propagation on the live node, surfacing as a transient
-    // "Space not found" denial. A human simply clicks Authorize again; do the
-    // same, bounded. The space, once created, persists — so a retry succeeds.
-    const denial = page.locator(".denial");
-    const spaceNotFound = denial.filter({ hasText: /space not found/i });
-    for (let attempt = 1; attempt <= 4; attempt++) {
-      await authorize.click();
-      // Whichever resolves first: dashboard (success) or the space-not-found denial.
-      await expect(previewButton.or(spaceNotFound).first()).toBeVisible({ timeout: 90000 });
-      if (await previewButton.isVisible()) break;
-      if (await spaceNotFound.isVisible()) {
-        console.log(`[flow] space-not-found (attempt ${attempt}) — retrying authorize`);
-        await page.waitForTimeout(3000);
-        continue;
-      }
-    }
-  } else {
-    console.log("[flow] returning owner → dashboard (setup skipped)");
-  }
-
-  // Dashboard arrival: the Preview card is present in both paths.
-  await expect(previewButton).toBeVisible({ timeout: 180000 });
-
-  // The signed-in address display should reflect the test wallet. The deployed
-  // dashboard renders a shortened did:pkh ending in the last 8 of the address, so
-  // match that suffix when the testid isn't present yet.
+  // Dashboard arrival.
+  await expect(previewButtonLoc(page)).toBeVisible({ timeout: 180000 });
   const addressDisplay = firstVisible(
     page.getByTestId("owner-address"),
-    page.getByText(ADDRESS_SUFFIX).first(),
+    page.getByText(addressSuffix).first(),
   );
   await expect(addressDisplay).toBeVisible();
 
-  // ── PART 4: run the preview → an allowed 3-line haiku ───────────────────────
-  await previewButton.click();
-
-  const haikuLines = firstVisible(
-    page.getByTestId("haiku-line"),
-    page.locator(".haiku .haiku-line"),
-  );
-  // Race the haiku against the preview's denial card so a backend failure (e.g. a
-  // decrypt/secrets-stage error) fails FAST with the actionable on-page reason
-  // instead of timing out generically. The denial card is the PreviewHaiku
-  // component's stage-keyed message under the Preview button.
-  const previewDenial = page
-    .locator(".card", { has: previewButton })
-    .locator(".denial");
-  await expect(haikuLines.first().or(previewDenial)).toBeVisible({ timeout: 180000 });
-  if (await previewDenial.isVisible()) {
-    const reason = (await previewDenial.innerText()).trim();
-    throw new Error(
-      `Preview did not produce a haiku — backend denied at the preview stage: "${reason}". ` +
-        `Check the backend logs (phala cvms logs <git-haiku-prod> -c dstack-githaiku-backend-1) ` +
-        `for the precise stage/reason.`,
-    );
-  }
-  await expect(haikuLines).toHaveCount(3);
-
-  const lines = await haikuLines.allInnerTexts();
-  console.log("─── generated haiku ───");
+  // ── PART 4: preview → an allowed 3-line haiku ───────────────────────────────
+  const lines = await previewHaiku(page);
+  console.log("─── fresh-owner haiku ───");
   for (const line of lines) console.log(line);
-  console.log("───────────────────────");
-  expect(lines.filter((l) => l.trim().length > 0)).toHaveLength(3);
+  console.log("─────────────────────────");
 
-  // ── PART 5: the mock wallet actually signed (SIWE / delegation) ─────────────
+  // ── PART 5: the mock wallet signed (login + recap) ──────────────────────────
   await expect
     .poll(() => page.evaluate(() => (window as any).__walletRequests))
     .toContain("personal_sign");
+});
+
+// ── Scenario 2: RETURNING owner → lightweight login lands on the dashboard ─────
+
+test("returning owner just signs in and lands on the dashboard (no setup, no token re-upload)", async ({
+  page,
+}) => {
+  const { githubLogin, githubToken } = loadE2eEnv();
+  const owner = new Wallet(process.env.GITHAIKU_E2E_PRIVATE_KEY ?? ANVIL_KEY_0);
+  const addressSuffix = owner.address.slice(-8);
+
+  logAppApiErrors(page);
+  await installWallet(page, owner);
+  autoCreateSpaceOnModal(page);
+
+  // ── PART 1: sign in ─────────────────────────────────────────────────────────
+  await page.goto("/owner");
+  await signIn(page);
+
+  // ── PART 2: self-bootstrap — if this fixed key has never been set up, the
+  // app routes to the SETUP form; run setup ONCE so a prior-run record exists.
+  // Then RELOAD and re-sign-in to assert the RETURNING path from a clean slate.
+  await expect(loginInputLoc(page).or(previewButtonLoc(page)).first()).toBeVisible({
+    timeout: 120000,
+  });
+  if (await loginInputLoc(page).isVisible()) {
+    console.log("[flow] returning key not yet set up → running setup once to seed it");
+    await runSetup(page, githubLogin, githubToken);
+    await expect(previewButtonLoc(page)).toBeVisible({ timeout: 180000 });
+
+    // Fresh page + fresh wallet-request log: now assert the lightweight login.
+    await page.reload();
+    await signIn(page);
+  } else {
+    console.log("[flow] returning owner already set up → dashboard directly");
+  }
+
+  // ── PART 3: assert the RETURNING (dashboard-direct) path ────────────────────
+  // The dashboard's Preview button is present; the setup token field is NOT.
+  await expect(previewButtonLoc(page)).toBeVisible({ timeout: 120000 });
+  await expect(tokenInputLoc(page)).toHaveCount(0);
+  await expect(loginInputLoc(page)).toHaveCount(0);
+
+  const addressDisplay = firstVisible(
+    page.getByTestId("owner-address"),
+    page.getByText(addressSuffix).first(),
+  );
+  await expect(addressDisplay).toBeVisible();
+
+  // Existing codes are listed (the record minted at least one at registration).
+  const codesTable = page.locator(".table").first();
+  await expect(codesTable).toBeVisible({ timeout: 60000 });
+  const codeRowsBefore = await codesTable.locator("tbody tr").count();
+  expect(codeRowsBefore).toBeGreaterThanOrEqual(1);
+
+  // ── PART 4: mint a NEW code — a backend JWT call, no token, no recap ─────────
+  const mintButton = page.getByRole("button", { name: /mint new code/i });
+  await mintButton.click();
+  // The "New code — shown once" card surfaces the freshly minted code.
+  await expect(page.getByText(/new code — shown once/i)).toBeVisible({ timeout: 60000 });
+  await expect
+    .poll(async () => codesTable.locator("tbody tr").count(), { timeout: 60000 })
+    .toBeGreaterThan(codeRowsBefore);
+
+  // ── PART 5: the login was a personal_sign, and the dashboard NEVER showed a
+  // token field — proving the returning path didn't require re-uploading the
+  // token. (Asserted BEFORE preview, while we're guaranteed on the dashboard.)
+  await expect
+    .poll(() => page.evaluate(() => (window as any).__walletRequests))
+    .toContain("personal_sign");
+  await expect(tokenInputLoc(page)).toHaveCount(0);
+
+  // ── PART 6: preview → an allowed 3-line haiku, reusing the STORED token ──────
+  // The returning owner reuses whatever token is already in their vault. If that
+  // token is stale (a prior run stored a now-expired one) the preview denies at
+  // the token/github stage — recover via the dashboard's "Rotate / re-store"
+  // affordance (the real-world fix for an expired token), which runs the heavy
+  // recap + secrets.put ONCE, then return to the dashboard and preview again.
+  let outcome = await previewOnce(page);
+  if (!outcome.ok && /github activity|stored token|re-store/i.test(outcome.reason)) {
+    console.log(`[flow] stored token stale ("${outcome.reason}") → rotating via dashboard affordance`);
+    const restore = firstVisible(
+      page.getByTestId("dashboard-restore-token"),
+      page.getByRole("button", { name: /rotate \/ re-store github token/i }),
+    );
+    await restore.click();
+    await runSetup(page, githubLogin, githubToken);
+    await expect(previewButtonLoc(page)).toBeVisible({ timeout: 180000 });
+    outcome = { ok: false, reason: "" }; // fall through to the asserting preview
+  }
+
+  const lines = outcome.ok ? outcome.lines : await previewHaiku(page);
+  console.log("─── returning-owner haiku ───");
+  for (const line of lines) console.log(line);
+  console.log("─────────────────────────────");
 });

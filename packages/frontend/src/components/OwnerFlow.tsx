@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 import {
   getOwner,
@@ -8,7 +8,7 @@ import {
   type OwnerAuthContext,
 } from '../api';
 import { signInOwner, type OwnerSession } from '../lib/ownerSession';
-import { putGithubToken, materializeBackendDelegation, hasGithubToken } from '../lib/tinycloud';
+import { putGithubToken, materializeBackendDelegation, setupOwnerRecap } from '../lib/tinycloud';
 import { verifyGithubToken, type GithubTokenResult } from '../lib/githubVerify';
 import { OwnerDashboard } from './OwnerDashboard';
 
@@ -16,10 +16,11 @@ type Phase = 'signin' | 'setup' | 'dashboard';
 
 /**
  * The real owner flow:
- *   1. OpenKey passkey sign-in → TinyCloud session + signer
- *   2. consent + GitHub login/token → secrets.put(GITHUB_TOKEN) →
- *      register owner → materialize + POST the backend delegation
- *   3. dashboard: codes + audit
+ *   1. OpenKey passkey sign-in → backend session JWT (ONE lightweight signature)
+ *   2. get-or-route: an EXISTING owner goes straight to their dashboard with just
+ *      `{ auth, owner, did }` — NO heavy recap, NO token re-upload. A NEW owner
+ *      gets the setup form, which runs the heavy web-sdk recap on submit.
+ *   3. dashboard: codes + audit + preview
  */
 export function OwnerFlow() {
   const [phase, setPhase] = useState<Phase>('signin');
@@ -27,7 +28,14 @@ export function OwnerFlow() {
   const [owner, setOwner] = useState<OwnerResult | null>(null);
 
   if (phase === 'dashboard' && session && owner) {
-    return <OwnerDashboard auth={session.auth} owner={owner} did={session.did} />;
+    return (
+      <OwnerDashboard
+        auth={session.auth}
+        owner={owner}
+        did={session.did}
+        onRestoreToken={() => setPhase('setup')}
+      />
+    );
   }
 
   if (phase === 'setup' && session) {
@@ -101,7 +109,11 @@ function SignInPhase({
   );
 }
 
-// ── Phase 2: consent + secrets.put + register + delegate ──────────────
+// ── Phase 2: heavy recap + secrets.put + register + delegate ──────────
+//
+// Reached ONLY by a NEW owner (getOwner → null). The heavy web-sdk recap runs
+// HERE, on submit — never at login. The returning-owner dashboard path never
+// mounts this component, so it never pays for the recap.
 
 function SetupPhase({
   session,
@@ -116,29 +128,9 @@ function SetupPhase({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // Returning-owner state: whether a token is ALREADY stored in their vault.
-  // `null` = still checking. We never read/show the token value, only presence.
-  const [tokenStored, setTokenStored] = useState<boolean | null>(null);
-
   // Frontend-only token check (against api.github.com, never our backend).
   const [verifying, setVerifying] = useState(false);
   const [verifyResult, setVerifyResult] = useState<GithubTokenResult | null>(null);
-
-  // On mount, surface what's already there instead of a blank form.
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const present = await hasGithubToken(session.tcw);
-        if (!cancelled) setTokenStored(present);
-      } catch {
-        if (!cancelled) setTokenStored(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [session.tcw]);
 
   // Re-typing the token invalidates a stale verification result.
   function onTokenChange(value: string) {
@@ -171,9 +163,16 @@ function SetupPhase({
     setBusy(true);
     setError(null);
     try {
+      // 0. Heavy web-sdk recap (DEFERRED to here): compose the app + backend
+      //    manifests and run the full `signIn()` with the OpenKey provider. This
+      //    is the new owner's ONE extra signature beyond login — it authorizes
+      //    secrets.put + the backend delegation.
+      setStatus('Authorizing your TinyCloud vault + backend delegation…');
+      const recap = await setupOwnerRecap(session.openkey);
+
       // 1. Owner writes the token into their OWN TinyCloud secrets vault.
       setStatus('Encrypting your token into your TinyCloud vault…');
-      await putGithubToken(session.tcw, githubToken.trim());
+      await putGithubToken(recap.tcw, githubToken.trim());
 
       // 2. Register the owner record (binds the address; mints the first code).
       setStatus('Registering you with the backend…');
@@ -182,9 +181,9 @@ function SetupPhase({
       // 3. Materialize + send the KV-get+decrypt delegation to the backend DID.
       setStatus('Delegating read-only secret access to the attested backend…');
       const serialized = await materializeBackendDelegation(
-        session.tcw,
-        session.backendDid,
-        session.composedRequest,
+        recap.tcw,
+        recap.backendDid,
+        recap.composedRequest,
       );
       const delegation = await sendDelegation(session.auth, {
         ownerId: ownerResult.ownerId,
@@ -204,22 +203,13 @@ function SetupPhase({
     <section className="card">
       <h2>Set up your haiku source</h2>
 
-      {tokenStored && (
-        <div className="stored-state">
-          <p>
-            <span className="ok-tick">✓</span> A GitHub token is already stored in your vault.
-            Re-store below to rotate it, or continue to your dashboard.
-          </p>
-        </div>
-      )}
-
       <div className="consent">
         <h3>What you&apos;re authorizing</h3>
         <ul>
           <li>Your GitHub token is encrypted into your own TinyCloud secrets vault.</li>
           <li>
             You delegate <strong>only</strong> read + decrypt of that one secret to the backend&apos;s
-            attested identity (<code className="mono">{short(session.backendDid)}</code>).
+            attested identity.
           </li>
           <li>
             The backend can <strong>only</strong> emit three-line haikus from your commit messages —
@@ -364,10 +354,6 @@ function TokenHelp() {
       </details>
     </div>
   );
-}
-
-function short(did: string): string {
-  return did.length > 28 ? `${did.slice(0, 18)}…${did.slice(-8)}` : did;
 }
 
 export type { OwnerAuthContext };
