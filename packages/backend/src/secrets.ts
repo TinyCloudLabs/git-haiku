@@ -1,10 +1,7 @@
 import {
-  deserializeDelegation,
-  resolveSecretPath,
-  type InlineEncryptedEnvelope,
-  type PortableDelegation,
-  type TinyCloudNode,
-} from '@tinycloud/node-sdk';
+  createServerDelegateClient,
+} from '@tinycloud/server';
+import { deserializeDelegation, type PortableDelegation } from '@tinycloud/node-sdk';
 
 import { config } from './config';
 import { loadDelegation } from './delegation-store';
@@ -53,19 +50,6 @@ const SECRET_FIELD: Record<SecretName, keyof OwnerSecrets> = {
   GITHUB_TOKEN: 'githubToken',
 };
 
-/** The encryption service the node-SDK attaches to a TinyCloudNode. */
-interface EncryptionCapableNode {
-  encryption: {
-    decryptEnvelope(
-      envelope: InlineEncryptedEnvelope,
-      capabilityProof: { proofs: string[] },
-    ): Promise<
-      | { ok: true; data: Uint8Array }
-      | { ok: false; error: { code: string; message: string } }
-    >;
-  };
-}
-
 /**
  * REAL: read the owner's secrets from TinyCloud Secrets under their stored
  * delegation, directly via the node-SDK (listen-style). Fails LOUDLY if no
@@ -77,7 +61,7 @@ class SdkSecretsProvider implements SecretsProvider {
   async getOwnerSecrets(owner: OwnerRecord): Promise<OwnerSecrets> {
     // The backend stable identity node: dstack-derived in-TEE, env in dev. The
     // same did:pkh that signed in and that owners delegated to.
-    const { node } = await getBackendIdentity();
+    const { node, privateKey, host } = await getBackendIdentity();
 
     const stored = await loadDelegation(owner.ownerId);
     if (!stored) {
@@ -98,112 +82,17 @@ class SdkSecretsProvider implements SecretsProvider {
     }
 
     const out: OwnerSecrets = { githubToken: null };
+    const client = createServerDelegateClient({
+      privateKey,
+      host,
+      delegation,
+      node,
+    });
     for (const name of SECRET_NAMES) {
-      out[SECRET_FIELD[name]] = await this.readSecret(node, delegation, name);
+      out[SECRET_FIELD[name]] = await client.getSecret(name, { scope: GITHUB_TOKEN_SCOPE });
     }
     return out;
   }
-
-  /**
-   * Read one secret under the owner's delegation. Ports listen
-   * `backend/src/delegation-activation.ts` (single-delegation path,
-   * `activatePortableDelegation` -> `node.useDelegation(delegations[0])`):
-   *  - activate the WHOLE delegation (carries BOTH the KV-get and the
-   *    encryption/decrypt resources) — NOT a KV-only re-scope,
-   *  - `access.kv.get(secretKey, { raw: true, prefix: "" })`,
-   *  - `proofCid = access.restorable?.delegationCid ?? access.delegation.cid`,
-   *  - `node.encryption.decryptEnvelope(envelope, { proofs: [proofCid] })`,
-   *  - `parseSecretPayload` (`{ value }` JSON).
-   */
-  private async readSecret(
-    node: TinyCloudNode,
-    delegation: PortableDelegation,
-    name: SecretName,
-  ): Promise<string> {
-    // The scoped vault path: vault/secrets/scoped/githaiku/<NAME>. Derived via
-    // the SDK so it matches the path the owner delegated KV-get on exactly.
-    const resolved = resolveSecretPath(name, { scope: GITHUB_TOKEN_SCOPE });
-    const secretKey = resolved.permissionPaths.vault;
-
-    // Precondition: the delegation must grant KV-get on the secret path. This is
-    // a guard only — it does NOT re-scope the activation.
-    const secretResource = (delegation.resources ?? []).find((resource) => {
-      const service = String(resource.service);
-      const isKv = service === 'tinycloud.kv' || service === 'kv';
-      const path = String(resource.path);
-      return isKv && (path === secretKey || secretKey.startsWith(`${path.replace(/\/$/, '')}/`));
-    });
-    if (!secretResource) {
-      throw new Error(`sdk provider: delegation does not grant KV get on ${secretKey}`);
-    }
-
-    // Activate the WHOLE delegation. `useDelegation` reconstructs every granted
-    // resource via `buildActivationAbilities`: the KV-get resource into the
-    // space-scoped abilities AND the encryption-network resource into the
-    // raw (space-independent) abilities. The minted activation sub-delegation
-    // therefore carries BOTH `tinycloud.kv/get` AND `tinycloud.encryption/
-    // decrypt`, so its `delegationCid` is a valid decrypt proof. Narrowing
-    // `resources` to KV-only (the previous code) produced an activation that
-    // carried no decrypt capability -> "Unauthorized Action" at decryptEnvelope.
-    const access = await node.useDelegation(delegation);
-
-    // Fetch the encrypted envelope from the owner's scoped secret path.
-    const result = await access.kv.get<unknown>(secretKey, { raw: true, prefix: '' });
-    if (!result.ok) {
-      const message = result.error?.message ?? `failed to read ${secretKey}`;
-      throw new Error(`sdk provider: KV get ${name} failed: ${message}`);
-    }
-
-    const envelope = parseEncryptedEnvelope((result.data as { data?: unknown } | undefined)?.data, name);
-
-    // The decrypt proof is the delegation chain CID (listen).
-    const proofCid = access.restorable?.delegationCid ?? access.delegation.cid;
-    if (!proofCid) {
-      throw new Error(`sdk provider: no decrypt proof available for ${name}`);
-    }
-
-    const encryption = (node as unknown as EncryptionCapableNode).encryption;
-    if (!encryption) {
-      throw new Error('sdk provider: TinyCloud encryption service is not available');
-    }
-
-    const decrypted = await encryption.decryptEnvelope(envelope, { proofs: [proofCid] });
-    if (!decrypted.ok) {
-      throw new Error(`sdk provider: decrypt ${name} failed: ${decrypted.error.message}`);
-    }
-
-    return parseSecretPayload(decrypted.data, name);
-  }
-}
-
-/** Parse the inline encrypted envelope JSON read from KV (listen). */
-function parseEncryptedEnvelope(rawEnvelope: unknown, name: SecretName): InlineEncryptedEnvelope {
-  const parsed = typeof rawEnvelope === 'string' ? JSON.parse(rawEnvelope) : rawEnvelope;
-  if (
-    typeof parsed !== 'object' ||
-    parsed === null ||
-    typeof (parsed as Partial<InlineEncryptedEnvelope>).v !== 'number' ||
-    typeof (parsed as Partial<InlineEncryptedEnvelope>).networkId !== 'string' ||
-    typeof (parsed as Partial<InlineEncryptedEnvelope>).ciphertext !== 'string' ||
-    typeof (parsed as Partial<InlineEncryptedEnvelope>).encryptedSymmetricKey !== 'string'
-  ) {
-    throw new Error(`sdk provider: secret ${name} did not contain an encrypted envelope`);
-  }
-  return parsed as InlineEncryptedEnvelope;
-}
-
-/** Parse the decrypted `{ value }` JSON payload (listen `parseSecretPayload`). */
-function parseSecretPayload(plaintext: Uint8Array, name: SecretName): string {
-  let parsed: { value?: unknown };
-  try {
-    parsed = JSON.parse(new TextDecoder().decode(plaintext)) as { value?: unknown };
-  } catch {
-    throw new Error(`sdk provider: secret ${name} did not contain valid JSON`);
-  }
-  if (typeof parsed.value !== 'string') {
-    throw new Error(`sdk provider: secret ${name} did not contain a string value`);
-  }
-  return parsed.value;
 }
 
 export function makeSecretsProvider(): SecretsProvider {
