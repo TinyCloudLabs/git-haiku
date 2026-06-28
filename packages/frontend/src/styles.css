@@ -519,3 +519,37 @@ body {
   margin-top: 24px;
   font-size: 14px;
 }
+
+/* ── token verification + stored-state ───────────────────────────── */
+.ok-tick {
+  color: var(--moss);
+  font-weight: 700;
+}
+.stored-state {
+  background: #eef2ee;
+  border-left: 3px solid var(--moss);
+  border-radius: 4px;
+  padding: 12px 16px;
+  margin: 0 0 18px;
+}
+.stored-state p {
+  margin: 0;
+  font-size: 14px;
+  color: #44504a;
+}
+.token-verify {
+  margin-top: 10px;
+  padding: 12px 16px;
+  border-radius: 4px;
+  font-size: 14px;
+}
+.token-verify.valid {
+  background: #eef2ee;
+  border-left: 3px solid var(--moss);
+}
+.token-verify.valid p {
+  margin: 4px 0;
+}
+.token-verify-hint {
+  font-size: 12px;
+}

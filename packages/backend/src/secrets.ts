@@ -1,9 +1,7 @@
-import { execFile } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { promisify } from 'node:util';
+import {
+  createServerDelegateClient,
+} from '@tinycloud/server';
+import { deserializeDelegation, type PortableDelegation } from '@tinycloud/node-sdk';
 
 import { config } from './config';
 import { loadDelegation } from './delegation-store';
@@ -11,19 +9,19 @@ import { getBackendIdentity } from './identity';
 import { GITHUB_TOKEN_SCOPE, SECRET_NAMES, type SecretName } from './policy';
 import type { OwnerRecord } from './store';
 
-const execFileAsync = promisify(execFile);
-
 /**
  * Secrets boundary.
  *
  * - LOCAL (default): the owner's GitHub token comes straight from the gitignored
  *   dev store. No TinyCloud node needed.
- * - TC-CLI: the real trust contract. The owner's GITHUB_TOKEN lives in TinyCloud
- *   Secrets; the backend reads it under the owner's delegation by invoking the
- *   real `tc` binary (`tc secrets get <NAME> --scope githaiku --delegation
- *   <file> --host <node> --json`). Secrets stay in memory — never written to
- *   disk (except the
- *   transient delegation file, deleted immediately) or logs.
+ * - SDK: the real trust contract. The owner's GITHUB_TOKEN lives in TinyCloud
+ *   Secrets; the backend reads it under the owner's stored delegation directly
+ *   via the node-SDK — the SAME mechanism the `listen` app uses on its server
+ *   (`backend/src/delegation-activation.ts` + `services/source-secret.ts`). The
+ *   backend applies the owner's serialized delegation through `useDelegation`,
+ *   does a KV `get` on the owner's scoped secret path, and decrypts the inline
+ *   envelope through the owner's encryption network. Secrets stay in memory —
+ *   never written to disk, never logged.
  *
  * The RedPill LLM key is backend-global config (env), NOT an owner secret, so it
  * is not part of this boundary.
@@ -53,96 +51,47 @@ const SECRET_FIELD: Record<SecretName, keyof OwnerSecrets> = {
 };
 
 /**
- * Resolve the absolute path to the published `tc` binary. We resolve the CLI's
- * own entrypoint and run it with the current node — no global install needed.
- */
-function resolveTcEntry(): string {
-  const require = createRequire(import.meta.url);
-  // The package's bin is dist/index.js; main resolves to the same module dir.
-  const pkgJson = require.resolve('@tinycloud/cli/package.json');
-  const dir = pkgJson.slice(0, pkgJson.lastIndexOf('/'));
-  return join(dir, 'dist', 'index.js');
-}
-
-/**
  * REAL: read the owner's secrets from TinyCloud Secrets under their stored
- * delegation via the `tc` CLI. Fails LOUDLY if no node / delegation / key.
+ * delegation, directly via the node-SDK (listen-style). Fails LOUDLY if no
+ * delegation / KV miss / decrypt failure — never silent.
  */
-class TcCliSecretsProvider implements SecretsProvider {
-  readonly kind = 'tc-cli';
-  private readonly tcEntry = resolveTcEntry();
+class SdkSecretsProvider implements SecretsProvider {
+  readonly kind = 'sdk';
 
   async getOwnerSecrets(owner: OwnerRecord): Promise<OwnerSecrets> {
-    // The backend stable key: dstack-derived in-TEE, env in dev. Same identity
-    // that signed in and that owners delegated to.
-    const { privateKey } = await getBackendIdentity();
+    // The backend stable identity node: dstack-derived in-TEE, env in dev. The
+    // same did:pkh that signed in and that owners delegated to.
+    const { node, privateKey, host } = await getBackendIdentity();
 
     const stored = await loadDelegation(owner.ownerId);
     if (!stored) {
       throw new Error(
-        `tc-cli provider: no stored delegation for owner ${owner.ownerId}. ` +
+        `sdk provider: no stored delegation for owner ${owner.ownerId}. ` +
           'The owner must POST /api/delegations first.',
       );
     }
 
-    // Write the delegation to a transient file (the only on-disk secret-adjacent
-    // artifact) under a 0700 temp dir, deleted in `finally`.
-    const dir = mkdtempSync(join(tmpdir(), 'githaiku-deleg-'));
-    const delegationFile = join(dir, 'delegation.json');
-    writeFileSync(delegationFile, stored.serialized, { encoding: 'utf8', mode: 0o600 });
-
+    let delegation: PortableDelegation;
     try {
-      const out: OwnerSecrets = { githubToken: null };
-      for (const name of SECRET_NAMES) {
-        out[SECRET_FIELD[name]] = await this.readSecret(name, delegationFile, privateKey);
-      }
-      return out;
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
+      delegation = deserializeDelegation(stored.serialized);
+    } catch (err) {
+      throw new Error(
+        `sdk provider: stored delegation for owner ${owner.ownerId} is not a ` +
+          `valid serialized PortableDelegation: ${String(err)}`,
+      );
     }
-  }
 
-  private async readSecret(
-    name: SecretName,
-    delegationFile: string,
-    privateKey: string,
-  ): Promise<string> {
-    const { stdout } = await execFileAsync(
-      process.execPath,
-      [
-        this.tcEntry,
-        'secrets',
-        'get',
-        name,
-        // The secret is namespaced under the `githaiku` scope, resolving to
-        // vault/secrets/scoped/githaiku/<NAME> — the same path the owner
-        // delegated KV-get on (see policy.secretVaultPath).
-        '--scope',
-        GITHUB_TOKEN_SCOPE,
-        '--delegation',
-        delegationFile,
-        '--host',
-        config.nodeHost,
-        '--json',
-      ],
-      {
-        // Backend stable key in env, NOT argv (argv is world-readable via ps).
-        env: { ...process.env, TC_PRIVATE_KEY: privateKey },
-        maxBuffer: 1024 * 1024,
-      },
-    );
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(stdout);
-    } catch {
-      throw new Error(`tc secrets get ${name}: non-JSON output`);
+    const out: OwnerSecrets = { githubToken: null };
+    const client = createServerDelegateClient({
+      privateKey,
+      host,
+      delegation,
+      node,
+    });
+    for (const name of SECRET_NAMES) {
+      out[SECRET_FIELD[name]] = await client.getSecret(name, { scope: GITHUB_TOKEN_SCOPE });
     }
-    const value = (parsed as { value?: unknown }).value;
-    if (typeof value !== 'string') {
-      throw new Error(`tc secrets get ${name}: missing string value in output`);
-    }
-    return value;
+    return out;
   }
 }
 
@@ -150,7 +99,7 @@ export function makeSecretsProvider(): SecretsProvider {
   switch (config.secretsProvider) {
     case 'local':
       return new LocalSecretsProvider();
-    case 'tc-cli':
-      return new TcCliSecretsProvider();
+    case 'sdk':
+      return new SdkSecretsProvider();
   }
 }

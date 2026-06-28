@@ -77,7 +77,14 @@ function encryptionPermission(ownerDid: string): PermissionEntry {
     service: 'tinycloud.encryption',
     space: 'encryption',
     path: defaultEncryptionNetworkId(ownerDid),
-    actions: ['decrypt'],
+    // FULLY-QUALIFIED action. Unlike the KV service (where a bare `get` resolves
+    // to `tinycloud.kv/get`), the encryption-network URN resource is matched
+    // against the exact ability string. The owner grants `tinycloud.encryption/
+    // decrypt` (frontend ownerEncryptionPermission) and the decryptEnvelope
+    // invocation requires `tinycloud.encryption/decrypt`; advertising bare
+    // `decrypt` here produced a delegated capability that did not satisfy it ->
+    // "Unauthorized Action". Mirror the owner's grant exactly (decrypt only).
+    actions: ['tinycloud.encryption/decrypt'],
     skipPrefix: true,
     description: "Decrypt Git Haiku secrets via the owner's default encryption network.",
   };

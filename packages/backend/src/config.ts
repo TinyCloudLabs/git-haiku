@@ -42,13 +42,15 @@ export const config = {
   /**
    * Secrets provider:
    *  - 'local' (default): owner's tokens come from the dev-local store. No infra.
-   *  - 'tc-cli': DEFERRED. Read the owner's secret under a TinyCloud delegation
-   *    via `@tinycloud/cli`. Not wired for the preview; selecting it throws.
+   *  - 'sdk': read the owner's secret under their stored TinyCloud delegation
+   *    directly via the node-SDK (the same mechanism the `listen` app uses on
+   *    its server). The backend applies the owner's delegation, KV-gets the
+   *    scoped secret, and decrypts the envelope — all in memory.
    */
-  secretsProvider: (process.env['GITHAIKU_SECRETS_PROVIDER'] ?? 'local') as 'local' | 'tc-cli',
+  secretsProvider: (process.env['GITHAIKU_SECRETS_PROVIDER'] ?? 'local') as 'local' | 'sdk',
 
   /**
-   * Backend stable identity (tc-cli provider only). The owner delegates KV-get +
+   * Backend stable identity (sdk provider only). The owner delegates KV-get +
    * decrypt to THIS key's did:pkh; the backend reads secrets under that
    * delegation. From env/config for local dev; dstack-derived in the TEE (seam).
    */

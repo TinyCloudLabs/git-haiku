@@ -5,12 +5,14 @@ import {
   serializeDelegation,
   type Manifest,
   type ComposedManifestRequest,
+  type ClientSession,
 } from '@tinycloud/web-sdk';
 import type { providers } from 'ethers';
 
 import { APP_MANIFEST, GITHUB_TOKEN_SCOPE } from './appManifest';
 import { TINYCLOUD_HOSTS } from './config';
-import type { ServerInfo, ServerInfoPermission } from '../api';
+import { getServerInfo, requestNonce, type ServerInfo, type ServerInfoPermission } from '../api';
+import type { OpenKeySession } from './openkey';
 
 /**
  * TinyCloud web-sdk wiring for the owner.
@@ -30,6 +32,34 @@ export interface SignInResult {
 /** Default encryption-network resource id for an owner DID. */
 function defaultEncryptionNetworkId(ownerDid: string, networkName = 'default'): string {
   return `urn:tinycloud:encryption:${ownerDid}:${networkName}`;
+}
+
+/** Encryption-network name secrets are sealed under. */
+const ENCRYPTION_NETWORK_NAME = 'default';
+
+/**
+ * The owner's OWN encryption-network grant.
+ *
+ * `defaults: true` expands to KV + SQL only — it grants the owner NO encryption
+ * capability, so a manifest-recap session (the browser path) cannot create or
+ * seal to its default encryption network. `secrets.put` encrypts the payload via
+ * `encryptToNetwork`, which requires the network to exist (create) and to be
+ * usable (decrypt). We add this grant at compose time (owner DID is known then)
+ * so the owner's signed recap covers creating + using their own default network.
+ *
+ * `network.create` is needed only the first time (lazy network creation);
+ * `decrypt` is needed to seal/open the envelope on every put/get. This is the
+ * owner's grant on their OWN network — the backend's decrypt delegation (a
+ * subset: decrypt only) is unaffected.
+ */
+function ownerEncryptionPermission(ownerDid: string): NonNullable<Manifest['permissions']>[number] {
+  return {
+    service: 'tinycloud.encryption',
+    space: 'encryption',
+    path: defaultEncryptionNetworkId(ownerDid, ENCRYPTION_NETWORK_NAME),
+    actions: ['tinycloud.encryption/network.create', 'tinycloud.encryption/decrypt'],
+    skipPrefix: true,
+  };
 }
 
 /**
@@ -78,23 +108,66 @@ function backendManifestFromServerInfo(
  * DID so the backend gets the broad decrypt grant.
  */
 export function composeOwnerRequest(info: ServerInfo, ownerDid: string): ComposedManifestRequest {
-  return composeManifestRequest([APP_MANIFEST, backendManifestFromServerInfo(APP_MANIFEST, info, ownerDid)]);
+  // The app manifest the OWNER signs: APP_MANIFEST plus the owner's own
+  // encryption-network grant (create + decrypt on their default network), which
+  // `defaults: true` does not provide. Without it, `secrets.put`'s
+  // `encryptToNetwork` cannot create/seal the envelope under a recap session.
+  const ownerAppManifest: Manifest = {
+    ...APP_MANIFEST,
+    permissions: [...(APP_MANIFEST.permissions ?? []), ownerEncryptionPermission(ownerDid)],
+  };
+  return composeManifestRequest([
+    ownerAppManifest,
+    backendManifestFromServerInfo(APP_MANIFEST, info, ownerDid),
+  ]);
 }
 
 /**
  * Create a TinyCloudWeb client and sign in with the OpenKey provider, signing
  * the composed capability request. Returns the live client + the request (so
  * the delegation step can materialize the backend's portion).
+ *
+ * Lifecycle (mirrors listen's owner sign-in): construct → clear any stale
+ * persisted session for this owner → `signIn()` (full wallet flow, fresh recap)
+ * → only THEN call services (`putGithubToken`, `materializeBackendDelegation`).
+ *
+ * Why clear the persisted session first: this is the owner SETUP path, which
+ * must sign the freshly composed recap (carrying the owner's encryption-network
+ * + scoped-secret grants) rather than silently restoring a stale recap that
+ * lacks them. Clearing forces `signIn()` to run the full wallet flow and sign
+ * the current capability request. listen does the same — it calls
+ * `clearPersistedSession(addr)` before its fresh-wallet `createAndSignIn`, only
+ * after restore attempts have been exhausted. (This is NOT a host workaround:
+ * as of web-sdk 2.4.0-beta.11 the SDK resolves/rehydrates hosts itself, so
+ * `tinycloudHosts` is left unset unless explicitly overridden — see config.ts.)
+ *
+ * @param ownerAddress - The owner's checksummed/lowercased address, used to
+ *   target the persisted session to clear.
+ * @param nonce - Backend-issued, address-bound nonce. Passed into the SIWE recap
+ *   (via `siweConfig.nonce`, matching listen) so the SINGLE sign-in signature
+ *   the owner produces also establishes the backend session — the signed
+ *   `session.siwe` carries this nonce, which the backend validates at
+ *   /api/auth/verify before issuing the session JWT.
+ *
+ * Returns the live client AND the resulting `ClientSession`, whose `siwe`
+ * (signed message) + `signature` the caller POSTs to /api/auth/verify.
  */
 export async function createAndSignIn(
   web3Provider: providers.Web3Provider,
   composedRequest: ComposedManifestRequest,
-): Promise<TinyCloudWeb> {
+  ownerAddress: string,
+  nonce: string,
+): Promise<{ tcw: TinyCloudWeb; session: ClientSession }> {
   const tcw = new (TinyCloudWeb as unknown as new (cfg: unknown) => TinyCloudWeb)({
     providers: { web3: { driver: web3Provider } },
+    // Optional override only — undefined lets the SDK resolve the node itself
+    // (registry → node.tinycloud.xyz fallback). See config.ts.
     tinycloudHosts: TINYCLOUD_HOSTS,
     autoCreateSpace: true,
     sessionStorage: new BrowserSessionStorage(),
+    // Embed the backend nonce in the SIWE message so the one sign-in signature
+    // also establishes the backend session (listen passes the nonce the same way).
+    siweConfig: { nonce },
     // `capabilityRequest` drives the SIWE recap, but secrets.put's
     // escalation/requestPermissions path needs the app manifest STORED on the
     // instance — so pass it explicitly (capabilityRequest still takes precedence
@@ -104,8 +177,48 @@ export async function createAndSignIn(
   });
   // Some SDK signing paths still read the provider property directly.
   (tcw as unknown as { provider: providers.Web3Provider }).provider = web3Provider;
-  await tcw.signIn();
-  return tcw;
+  // Owner setup must sign the freshly composed recap: clear any stale persisted
+  // session so signIn() runs the full wallet flow and signs the current
+  // capability request, matching listen's pre-fresh-sign-in clear.
+  await tcw.clearPersistedSession(ownerAddress);
+  const session = await tcw.signIn();
+  return { tcw, session };
+}
+
+/**
+ * The heavy web-sdk recap, materialized lazily for the SETUP path only.
+ *
+ * A returning owner NEVER builds this — login is a single lightweight signature
+ * (see ownerSession.ts). Only a NEW owner (or one rotating/re-storing their
+ * token) runs this: it fetches `/api/server-info`, composes the app + backend
+ * manifests, and drives the full web-sdk `signIn()` (the recap-bearing wallet
+ * flow) using the SAME OpenKey provider already in hand. This is the ONE extra
+ * signature a new owner produces beyond login.
+ *
+ * Returns the live `tcw`, the composed request (for `materializeBackendDelegation`),
+ * and the backend DID — everything `SetupPhase` needs to put the token + delegate.
+ */
+export interface OwnerRecap {
+  tcw: TinyCloudWeb;
+  composedRequest: ComposedManifestRequest;
+  backendDid: string;
+}
+
+export async function setupOwnerRecap(openkey: OpenKeySession): Promise<OwnerRecap> {
+  const info = await getServerInfo();
+  const composedRequest = composeOwnerRequest(info, openkey.did);
+  // The recap sign-in also wants a fresh address-bound nonce embedded in its SIWE
+  // message (the login nonce was already burned by /api/auth/verify). The recap's
+  // backend-session value is unused here (the JWT is established at login), but
+  // the web-sdk requires a nonce for the SIWE message it signs.
+  const nonce = await requestNonce(openkey.address);
+  const { tcw } = await createAndSignIn(
+    openkey.web3Provider,
+    composedRequest,
+    openkey.address,
+    nonce,
+  );
+  return { tcw, composedRequest, backendDid: info.did };
 }
 
 /**
@@ -115,6 +228,16 @@ export async function createAndSignIn(
  * backend reads.
  */
 export async function putGithubToken(tcw: TinyCloudWeb, token: string): Promise<void> {
+  // A manifest-recap sign-in does NOT auto-host the owner's `secrets` owned-space
+  // (the SDK only auto-hosts it when neither manifest nor capabilityRequest is
+  // set). Host it explicitly via the public API (idempotent, recap-authorized —
+  // no extra prompt) so the first scoped put doesn't 404 "Space not found".
+  await tcw.ensureOwnedSpaceHosted('secrets');
+  // `secrets.put` seals the payload via the owner's default encryption network
+  // (`encryptToNetwork`), which requires the network to exist — it is NOT
+  // auto-created by `put`. Create-or-fetch it first (the recap grants
+  // network.create + decrypt, so this needs no extra prompt).
+  await tcw.ensureEncryptionNetwork(ENCRYPTION_NETWORK_NAME);
   const result = await tcw.secrets.put('GITHUB_TOKEN', token, { scope: GITHUB_TOKEN_SCOPE });
   if (!result.ok) {
     throw new Error(result.error?.message ?? 'secrets.put failed');
@@ -139,7 +262,15 @@ export async function materializeBackendDelegation(
   return serializeDelegation(result.delegation);
 }
 
-/** Restore a persisted browser session for `address`, or null if none. */
+/**
+ * Restore a persisted browser session for `address`, or null if none.
+ *
+ * As of web-sdk 2.4.0-beta.11 a restored session rehydrates its own
+ * `tinycloudHosts` (persisted at sign-in, with a registry → node.tinycloud.xyz
+ * lazy fallback), so service calls (`secrets.put`, `ensureOwnedSpaceHosted`)
+ * work without a fresh `signIn()`. `tinycloudHosts` is passed only as an
+ * explicit override (undefined otherwise — see config.ts).
+ */
 export async function restoreSession(address: string): Promise<TinyCloudWeb | null> {
   const tcw = new (TinyCloudWeb as unknown as new (cfg: unknown) => TinyCloudWeb)({
     tinycloudHosts: TINYCLOUD_HOSTS,

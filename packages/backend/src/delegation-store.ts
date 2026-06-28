@@ -7,19 +7,18 @@ import { getBackendIdentity, withSessionRefresh } from './identity';
 /**
  * Per-owner delegation store.
  *
- * Persists the owner's serialized delegation so the tc-cli SecretsProvider can
+ * Persists the owner's serialized delegation so the sdk SecretsProvider can
  * read the owner's secrets under it. Keyed by ownerId.
  *
- *  - tc-cli / TEE: the backend's OWN TinyCloud KV space, key
+ *  - sdk / TEE: the backend's OWN TinyCloud KV space, key
  *    `delegations/<ownerId>` (lifted from listen
  *    `packages/server/src/delegation-store.ts`). Survives across TEE reboots and
  *    is bound to the backend's stable identity.
  *  - local (dev): a gitignored JSON file under config.dataDir, so the
  *    zero-infra preview keeps working.
  *
- * The stored `serialized` is the CLI delegation candidate artifact
- * ({ delegation: PortableDelegation, ... }) that `tc secrets get --delegation
- * <file>` consumes.
+ * The stored `serialized` is the serialized PortableDelegation that the sdk
+ * provider feeds to `node.useDelegation(...)`.
  */
 
 export interface StoredDelegation {
@@ -83,7 +82,7 @@ function fileStore(): { put(r: StoredDelegation): void; get(id: string): StoredD
 
 /** True when delegations should live in the backend's TinyCloud KV space. */
 function useKv(): boolean {
-  return config.secretsProvider === 'tc-cli';
+  return config.secretsProvider === 'sdk';
 }
 
 function parseStored(raw: unknown): StoredDelegation | null {

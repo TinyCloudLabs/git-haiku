@@ -25,9 +25,25 @@ export interface EgressSuccessPayload {
   readonly proof: EgressProof;
 }
 
+/**
+ * Which pipeline stage produced a denial. Diagnostic only — it names the step
+ * that failed and carries NO commit data or secrets. Omitted on denials that
+ * aren't pipeline-stage failures (invalid code, rate limited, no activity).
+ */
+export type EgressStage = 'code' | 'secrets' | 'github' | 'generate' | 'internal';
+
+export const EGRESS_STAGES: readonly EgressStage[] = [
+  'code',
+  'secrets',
+  'github',
+  'generate',
+  'internal',
+] as const;
+
 export interface EgressDenialPayload {
   readonly allowed: false;
   readonly reason: string;
+  readonly stage?: EgressStage;
 }
 
 export type EgressErrorPayload = EgressDenialPayload;

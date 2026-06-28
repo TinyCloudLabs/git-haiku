@@ -40,22 +40,25 @@ function withinWindow(timestamp: string, windowDays: number): boolean {
   return t >= cutoff;
 }
 
-interface GithubEventCommit {
-  message: string;
+interface GithubSearchCommitItem {
+  repository?: { full_name?: string };
+  commit?: { message?: string; author?: { date?: string } };
 }
-interface GithubEvent {
-  type: string;
-  created_at: string;
-  repo?: { name: string };
-  payload?: { commits?: GithubEventCommit[] };
+interface GithubSearchResponse {
+  items?: GithubSearchCommitItem[];
 }
 
 /**
  * Fetch bounded recent commit metadata for a GitHub user.
  *
- * Uses the public events API (PushEvents) which exposes commit messages + repo
- * + timestamp without touching repo contents. Bounded by maxCommits and
- * windowDays. If no token is provided, falls back to the labeled dev fixture.
+ * Uses the commit SEARCH API (`/search/commits?q=author:<login>`), which returns
+ * the user's recent commits across all accessible repos with message + repo +
+ * date. We deliberately do NOT use `/users/<login>/events`: GitHub omits the
+ * `commits` array from PushEvents for organization repos (the payload carries
+ * only ref/head/before), so an org-active user shows "no recent activity".
+ *
+ * Still strictly message + repo + timestamp — never file contents, diffs, or
+ * patches. Bounded by maxCommits and windowDays. No token => labeled dev fixture.
  */
 export async function fetchRecentCommits(params: {
   githubLogin: string;
@@ -71,34 +74,38 @@ export async function fetchRecentCommits(params: {
     };
   }
 
-  const res = await fetch(`https://api.github.com/users/${encodeURIComponent(githubLogin)}/events?per_page=100`, {
-    headers: {
-      Authorization: `Bearer ${githubToken}`,
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-      'User-Agent': 'githaiku',
+  const query = encodeURIComponent(`author:${githubLogin}`);
+  const res = await fetch(
+    `https://api.github.com/search/commits?q=${query}&sort=author-date&order=desc&per_page=100`,
+    {
+      headers: {
+        Authorization: `Bearer ${githubToken}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+        'User-Agent': 'githaiku',
+      },
     },
-  });
+  );
 
   if (!res.ok) {
-    throw new Error(`GitHub events fetch failed: ${res.status}`);
+    throw new Error(`GitHub commit search failed: ${res.status}`);
   }
 
-  const events = (await res.json()) as GithubEvent[];
+  const body = (await res.json()) as GithubSearchResponse;
   const commits: CommitMeta[] = [];
 
-  for (const ev of events) {
-    if (ev.type !== 'PushEvent' || !ev.payload?.commits) continue;
-    if (!withinWindow(ev.created_at, windowDays)) continue;
-    for (const c of ev.payload.commits) {
-      // Strictly message + repo + timestamp. Nothing else.
-      commits.push({
-        repo: ev.repo?.name ?? 'unknown',
-        message: c.message.split('\n')[0]!.slice(0, 200),
-        timestamp: ev.created_at,
-      });
-      if (commits.length >= maxCommits) break;
-    }
+  // Results are author-date desc, so the first in-window maxCommits are newest.
+  for (const item of body.items ?? []) {
+    const date = item.commit?.author?.date;
+    const message = item.commit?.message;
+    if (!date || !message) continue;
+    if (!withinWindow(date, windowDays)) continue;
+    // Strictly message + repo + timestamp. Nothing else.
+    commits.push({
+      repo: item.repository?.full_name ?? 'unknown',
+      message: message.split('\n')[0]!.slice(0, 200),
+      timestamp: date,
+    });
     if (commits.length >= maxCommits) break;
   }
 

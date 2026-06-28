@@ -78,6 +78,12 @@ export const egressSchema = {
           maxLength: 120,
           pattern: '^[\\x20-\\x7E]+$',
         },
+        // Optional diagnostic. Names which pipeline stage failed; carries no
+        // commit data or secrets. Only valid on the denial branch.
+        stage: {
+          type: 'string',
+          enum: ['code', 'secrets', 'github', 'generate', 'internal'],
+        },
       },
     },
   ],

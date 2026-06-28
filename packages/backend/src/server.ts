@@ -1,26 +1,28 @@
 import cors from '@fastify/cors';
-import {
-  type EgressPayload,
-  guardOutboundPayload,
-  serializeGuardedResponse,
-} from '@githaiku/shared';
+import { type EgressPayload, serializeGuardedResponse } from '@githaiku/shared';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 
 import { getAttestation, verifyTeeStartup } from './attestation';
-import { AuthError, nonceStore, verifyOwnerAuth, type OwnerAuth } from './auth';
+import {
+  AuthError,
+  issueSessionToken,
+  nonceStore,
+  verifySessionToken,
+  verifySIWE,
+  type OwnerAuth,
+} from './auth';
 import { readAudit, recordAudit, recordInvalidCodeAudit } from './audit';
 import { config } from './config';
 import { storeDelegation } from './delegation-store';
 import { validateDelegation } from './delegations';
-import { fetchRecentCommits } from './github';
-import { makeHaikuGenerator } from './haiku';
-import { getBackendIdentity } from './identity';
+import { getBackendIdentity, resolveBackendPrivateKey } from './identity';
+import { generateHaikuForOwner } from './pipeline';
 import { backendPolicy, ownerDidFromAddress } from './policy';
-import { buildProof } from './proof';
 import {
   checkHaikuRequestBackoff,
   consumeInvalidHaikuAttempt,
   consumeMatchedOwnerHaikuAttempt,
+  consumeOwnerPreviewAttempt,
   type HaikuRateLimitResult,
 } from './rate-limit';
 import { makeSecretsProvider } from './secrets';
@@ -42,17 +44,27 @@ import {
  * (sanitize -> validate -> serialize). Denials and errors carry no commit data.
  *
  * Owner-scoped endpoints (/api/owner, /api/delegations, /api/codes/*,
- * /api/audit) are OWNER-AUTHENTICATED via a SIWE-style signature (see auth.ts).
- * Public: /health, /attestation, /api/server-info, /api/auth/nonce, /api/haiku.
+ * /api/audit) are OWNER-AUTHENTICATED via a backend session JWT, established
+ * from the single web-sdk SIWE sign-in signature (see auth.ts). Authed requests
+ * carry `Authorization: Bearer <jwt>`.
+ * Public: /health, /attestation, /api/server-info, /api/auth/nonce,
+ * /api/auth/verify, /api/haiku.
  */
 export async function buildServer(): Promise<FastifyInstance> {
   await verifyTeeStartup();
 
-  const app = Fastify({ logger: false });
+  // Logging ON. The backend runs in the attested TEE, so logging error MESSAGES
+  // server-side is safe and is the only way to tell which pipeline stage failed.
+  // We never log secret VALUES or raw commit contents (only generic + stage).
+  const app = Fastify({ logger: { level: process.env['GITHAIKU_LOG_LEVEL'] ?? 'info' } });
   const secrets = makeSecretsProvider();
 
   app.setErrorHandler((error, request, reply) => {
-    if (request.url.startsWith('/api/haiku')) {
+    // Log the REAL error server-side (safe in the TEE) before redacting it out
+    // of the response.
+    request.log.error({ err: error, url: request.url }, 'request error');
+
+    if (request.url.startsWith('/api/haiku') || request.url.startsWith('/api/preview')) {
       reply.code(503);
       reply.header('content-type', 'application/json');
       return reply.send(serializeGuardedResponse(error));
@@ -78,12 +90,53 @@ export async function buildServer(): Promise<FastifyInstance> {
     }
   });
 
-  // --- Auth nonce (public): owner GETs a one-time nonce to sign ------------
-  app.get('/api/auth/nonce', async () => ({ nonce: nonceStore.issue() }));
+  // --- Auth nonce (public): owner GETs a one-time, address-bound nonce -----
+  // The web-sdk embeds this nonce in the SIWE message it asks the owner to sign.
+  app.get('/api/auth/nonce', async (request, reply) => {
+    const address = (request.query as { address?: unknown }).address;
+    if (typeof address !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(address)) {
+      reply.code(400);
+      return { error: 'invalid_address', message: "query parameter 'address' must be an Ethereum address" };
+    }
+    return { nonce: nonceStore.issue(address) };
+  });
+
+  // --- Auth verify (public): SIWE sign-in signature -> backend session JWT --
+  // The owner's single web-sdk SIWE signature is sent here. We verify it,
+  // validate the embedded address-bound nonce (single-use replay protection),
+  // and issue a JWT signed with the backend's stable key. No re-signing after.
+  app.post('/api/auth/verify', async (request, reply) => {
+    const body = (request.body ?? {}) as { message?: unknown; signature?: unknown };
+    const message = typeof body.message === 'string' ? body.message : '';
+    const signature = typeof body.signature === 'string' ? body.signature : '';
+    if (!message || !signature) {
+      reply.code(400);
+      return { error: 'invalid_request', message: 'message and signature are required' };
+    }
+    try {
+      const { address, nonce } = await verifySIWE(message, signature);
+      if (!nonceStore.validate(address, nonce)) {
+        reply.code(401);
+        return { error: 'invalid_nonce', message: 'nonce is invalid, expired, or already used' };
+      }
+      const privateKey = await resolveBackendPrivateKey();
+      const { token, expiresIn } = await issueSessionToken(address, privateKey);
+      return { token, expiresIn, address };
+    } catch (err) {
+      // Log the real reason server-side (safe in the TEE) — pinpoints a true
+      // signature/address mismatch vs a parse/recovery failure.
+      request.log.warn({ err, url: request.url }, 'auth verify failed');
+      reply.code(401);
+      return {
+        error: 'verification_failed',
+        message: err instanceof AuthError ? err.message : 'SIWE verification failed',
+      };
+    }
+  });
 
   // --- Server info (no auth): backend DID + the policy owners must delegate -
   app.get('/api/server-info', async (_request, reply) => {
-    if (secrets.kind !== 'tc-cli') {
+    if (secrets.kind !== 'sdk') {
       reply.code(404);
       return { error: 'not_found' };
     }
@@ -98,6 +151,28 @@ export async function buildServer(): Promise<FastifyInstance> {
       reply.code(503);
       return { error: 'unavailable' };
     }
+  });
+
+  // --- Owner lookup (OWNER-AUTHENTICATED) ---------------------------------
+  // A returning owner reads their existing record by authenticated address. No
+  // code is minted on this read: secretCode/codeId are empty, which signals
+  // "nothing newly minted" to the client.
+  app.get('/api/owner', async (request, reply) => {
+    const auth = await authenticate(request, reply);
+    if (!auth) return;
+
+    const owner = findOwnerByAddress(auth.address);
+    if (!owner) {
+      reply.code(404);
+      return { error: 'no_owner', message: 'no owner record for the authenticated address' };
+    }
+    return {
+      ownerId: owner.ownerId,
+      githubLogin: owner.githubLogin,
+      hasGithubToken: owner.githubToken !== null,
+      secretCode: '',
+      codeId: '',
+    };
   });
 
   // --- Owner setup (OWNER-AUTHENTICATED) ----------------------------------
@@ -115,11 +190,19 @@ export async function buildServer(): Promise<FastifyInstance> {
       return { error: 'githubLogin is required' };
     }
 
-    // One address = one owner. A returning owner manages their existing record
-    // via the code/secret endpoints rather than creating a duplicate.
-    if (findOwnerByAddress(auth.address)) {
-      reply.code(409);
-      return { error: 'owner_exists', message: 'an owner already exists for this address' };
+    // One address = one owner. A returning owner gets their existing record back
+    // (idempotent) — no duplicate record, no duplicate code. secretCode/codeId
+    // are empty to signal "nothing newly minted".
+    const existing = findOwnerByAddress(auth.address);
+    if (existing) {
+      reply.code(200);
+      return {
+        ownerId: existing.ownerId,
+        githubLogin: existing.githubLogin,
+        hasGithubToken: existing.githubToken !== null,
+        secretCode: '',
+        codeId: '',
+      };
     }
 
     const result = createOwner({
@@ -133,9 +216,9 @@ export async function buildServer(): Promise<FastifyInstance> {
 
   // --- Receive an owner's delegation (OWNER-AUTHENTICATED) -----------------
   app.post('/api/delegations', async (request, reply) => {
-    if (secrets.kind !== 'tc-cli') {
+    if (secrets.kind !== 'sdk') {
       reply.code(404);
-      return { error: 'delegations are only accepted under the tc-cli secrets provider' };
+      return { error: 'delegations are only accepted under the sdk secrets provider' };
     }
     const auth = await authenticate(request, reply);
     if (!auth) return;
@@ -257,51 +340,74 @@ export async function buildServer(): Promise<FastifyInstance> {
         return sendRateLimited(reply, matchedLimit);
       }
 
-      try {
-        // 2. Resolve the owner's secrets (dev-local or tc-cli delegated).
-        const ownerSecrets = await secrets.getOwnerSecrets(owner);
+      // 2-5. Run the shared pipeline: secrets -> github -> generate -> guard.
+      const result = await generateHaikuForOwner(owner, secrets);
 
-        // 3. Fetch bounded commit metadata (messages/repos/timestamps only).
-        const { commits } = await fetchRecentCommits({
-          githubLogin: owner.githubLogin,
-          githubToken: ownerSecrets.githubToken,
-        });
-
-        if (commits.length === 0) {
-          await recordAudit({ code, ownerId: owner.ownerId, decision: 'deny', reason: 'no_recent_activity' });
-          const denial: EgressPayload = { allowed: false, reason: 'no recent activity' };
-          return reply.send(serializeGuardedResponse(denial));
-        }
-
-        // 4. Generate the haiku (RedPill when keyed; deterministic fallback).
-        const generator = makeHaikuGenerator();
-        const lines = await generator.generate(commits);
-
-        // 5. Build the guarded success shape with real (in-TEE) provenance.
-        const success: EgressPayload = {
-          allowed: true,
-          haiku: { lines },
-          proof: await buildProof(),
-        };
-        const guarded = guardOutboundPayload(success);
-        await recordAudit({ code, ownerId: owner.ownerId, decision: 'allow', reason: 'ok' });
-        return reply.send(JSON.stringify(guarded));
-      } catch (err) {
-        // Operational failure. Redacted to a denial carrying no commit data.
-        await recordAudit({ code, ownerId: owner.ownerId, decision: 'deny', reason: 'error' });
-        reply.code(503);
-        return reply.send(serializeGuardedResponse(err));
+      if (result.ok) {
+        await recordAudit({ code, ownerId: owner.ownerId, decision: 'allow', reason: result.auditReason });
+        return reply.send(JSON.stringify(result.payload));
       }
+
+      // Staged, still-safe failure. Log the REAL error server-side (TEE-safe);
+      // the response carries only a generic reason + the diagnostic stage.
+      if (result.logError !== null) {
+        request.log.error(
+          { err: result.logError, stage: result.stage, ownerId: owner.ownerId },
+          'haiku pipeline failed',
+        );
+      }
+      await recordAudit({ code, ownerId: owner.ownerId, decision: 'deny', reason: result.auditReason });
+      reply.code(result.statusCode);
+      return reply.send(JSON.stringify(result.payload));
     },
   );
+
+  // --- Owner preview: owner-authed full-pipeline run (THE diagnostic) -------
+  // Same SIWE owner auth as the other owner endpoints. Resolves the owner by the
+  // authenticated address and runs the EXACT same pipeline as /api/haiku so the
+  // owner can test their setup and preview the haiku. Response is the guarded
+  // egress shape: success (200) or the staged guarded denial (non-2xx).
+  app.post('/api/preview', async (request, reply) => {
+    reply.header('content-type', 'application/json');
+
+    const ctx = await authenticateOwner(request, reply);
+    if (!ctx) return;
+
+    const previewLimit = consumeOwnerPreviewAttempt(ctx.owner.ownerId);
+    if (!previewLimit.allowed) {
+      return sendRateLimited(reply, previewLimit);
+    }
+
+    const result = await generateHaikuForOwner(ctx.owner, secrets);
+
+    if (result.ok) {
+      await recordAudit({ code: '', ownerId: ctx.owner.ownerId, decision: 'allow', reason: 'preview_ok' });
+      return reply.send(JSON.stringify(result.payload));
+    }
+
+    if (result.logError !== null) {
+      request.log.error(
+        { err: result.logError, stage: result.stage, ownerId: ctx.owner.ownerId },
+        'preview pipeline failed',
+      );
+    }
+    await recordAudit({ code: '', ownerId: ctx.owner.ownerId, decision: 'deny', reason: `preview_${result.auditReason}` });
+    reply.code(result.statusCode);
+    return reply.send(JSON.stringify(result.payload));
+  });
 
   return app;
 }
 
 // ── auth helpers ─────────────────────────────────────────────────────
 
-function corsOrigin(): true | string[] {
-  if (config.allowedOrigins.length > 0) return [...config.allowedOrigins];
+// The project's Cloudflare Pages domain: canonical `git-haiku.pages.dev` plus
+// per-deploy preview subdomains (`<hash>.git-haiku.pages.dev`). Always allowed
+// in addition to the configured exact origins (e.g. githaiku.com).
+const PAGES_DEV_ORIGIN = /^https:\/\/([a-z0-9-]+\.)?git-haiku\.pages\.dev$/;
+
+function corsOrigin(): true | (string | RegExp)[] {
+  if (config.allowedOrigins.length > 0) return [...config.allowedOrigins, PAGES_DEV_ORIGIN];
   if (process.env['NODE_ENV'] !== 'production' && process.env['GITHAIKU_TEE'] !== '1') return true;
   throw new Error('GITHAIKU_ALLOWED_ORIGINS is required in production/TEE mode');
 }
@@ -323,18 +429,23 @@ function redactedStatusCode(error: unknown): number {
 }
 
 /**
- * Verify the owner-auth payload on a request; replies 401 + returns null on
- * failure. Auth is carried in headers (works uniformly for GET + POST):
- *   x-githaiku-address, x-githaiku-nonce, x-githaiku-signature.
+ * Verify the backend session JWT on a request; replies 401 + returns null on
+ * failure. Auth is carried in the `Authorization: Bearer <jwt>` header (works
+ * uniformly for GET + POST). The JWT was issued at /api/auth/verify from the
+ * owner's single SIWE sign-in signature — no per-request signing.
  */
 async function authenticate(request: FastifyRequest, reply: FastifyReply): Promise<OwnerAuth | null> {
-  const h = request.headers;
+  const header = request.headers.authorization;
+  const token =
+    typeof header === 'string' ? (header.startsWith('Bearer ') ? header.slice(7) : header) : '';
+  if (!token) {
+    reply.code(401);
+    reply.send({ error: 'unauthenticated', message: 'Authorization bearer token is required' });
+    return null;
+  }
   try {
-    return await verifyOwnerAuth({
-      address: h['x-githaiku-address'],
-      nonce: h['x-githaiku-nonce'],
-      signature: h['x-githaiku-signature'],
-    });
+    const privateKey = await resolveBackendPrivateKey();
+    return await verifySessionToken(token, privateKey);
   } catch (err) {
     reply.code(401);
     reply.send({ error: 'unauthenticated', message: err instanceof AuthError ? err.message : 'authentication failed' });

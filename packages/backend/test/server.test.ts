@@ -3,12 +3,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { EGRESS_POLICY_ID } from '@githaiku/shared';
+import { SiweMessage } from 'siwe';
 import { privateKeyToAccount } from 'viem/accounts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 // Point the dev store at a throwaway dir BEFORE importing modules that read config.
 const DATA_DIR = mkdtempSync(join(tmpdir(), 'githaiku-test-'));
 process.env.GITHAIKU_DATA_DIR = DATA_DIR;
+// The backend signs/verifies session JWTs with its stable private key. Outside
+// the TEE that key comes from env; set a throwaway anvil key for the suite.
+process.env.GITHAIKU_BACKEND_PRIVATE_KEY =
+  '0xdf57089febbacf7ba0bc227dafbffa9fc08a93fdc68e1e42411a14efcf23656e';
 // These tests assert the deterministic haiku; force it so the suite never makes
 // a live RedPill call (e.g. if REDPILL_API_KEY is present in the environment).
 process.env.GITHAIKU_HAIKU_GENERATOR = 'deterministic';
@@ -18,7 +23,6 @@ process.env.GITHAIKU_HAIKU_RATE_MAX = '1000';
 
 const { buildServer } = await import('../src/server');
 const { createOwner } = await import('../src/store');
-const { buildAuthMessage } = await import('../src/auth');
 const { codeIdFor, resetAuditCoalescing } = await import('../src/audit');
 
 const app = await buildServer();
@@ -34,17 +38,37 @@ const ANVIL_KEYS = [
   '0x92db14e403b83dfe3df233f83dfa3a0d7096f21ca9b0d6d6b8d88b2b4ec1564e',
 ] as const;
 
-/** Signed owner-auth HEADERS for a given wallet (default: wallet 0). */
+/**
+ * Drive the single-signature SIWE → JWT flow for a wallet and return the
+ * `Authorization: Bearer <jwt>` header used by every authed call. Mirrors the
+ * frontend: GET an address-bound nonce → sign a SIWE message embedding it →
+ * POST /api/auth/verify → use the returned JWT. (default: wallet 0).
+ */
 async function authHeaders(keyIndex = 0): Promise<Record<string, string>> {
   const acct = privateKeyToAccount(ANVIL_KEYS[keyIndex]!);
-  const res = await app.inject({ method: 'GET', url: '/api/auth/nonce' });
-  const { nonce } = JSON.parse(res.body);
-  const signature = await acct.signMessage({ message: buildAuthMessage(nonce) });
-  return {
-    'x-githaiku-address': acct.address,
-    'x-githaiku-nonce': nonce,
-    'x-githaiku-signature': signature,
-  };
+  const nonceRes = await app.inject({
+    method: 'GET',
+    url: `/api/auth/nonce?address=${acct.address}`,
+  });
+  const { nonce } = JSON.parse(nonceRes.body);
+  const message = new SiweMessage({
+    domain: 'localhost',
+    address: acct.address,
+    statement: 'Git Haiku owner sign-in',
+    uri: 'http://localhost',
+    version: '1',
+    chainId: 1,
+    nonce,
+    issuedAt: new Date().toISOString(),
+  }).prepareMessage();
+  const signature = await acct.signMessage({ message });
+  const verifyRes = await app.inject({
+    method: 'POST',
+    url: '/api/auth/verify',
+    payload: { message, signature },
+  });
+  const { token } = JSON.parse(verifyRes.body);
+  return { authorization: `Bearer ${token}` };
 }
 
 let secretCode: string;
@@ -96,7 +120,7 @@ describe('POST /api/haiku', () => {
     expect(JSON.parse(res.body)).toEqual({ allowed: false, reason: 'invalid code' });
   });
 
-  it('returns non-2xx guarded JSON for operational failures', async () => {
+  it('returns a staged guarded denial for an upstream GitHub failure', async () => {
     const realFetch = global.fetch;
     global.fetch = (async () => new Response('upstream failed with commit secret', { status: 500 })) as typeof fetch;
     try {
@@ -105,9 +129,13 @@ describe('POST /api/haiku', () => {
         githubToken: 'ghp_test_operational_failure',
       }).secretCode;
       const res = await app.inject({ method: 'POST', url: '/api/haiku', payload: { code: failingCode } });
-      expect(res.statusCode).toBe(503);
-      expect(JSON.parse(res.body)).toEqual({ allowed: false, reason: 'internal error' });
-      expect(res.body).not.toContain('GitHub');
+      expect(res.statusCode).toBe(502);
+      const body = JSON.parse(res.body);
+      // Staged, still-safe denial: generic reason + the `github` stage, no data.
+      expect(body).toEqual({ allowed: false, reason: 'could not read your GitHub activity', stage: 'github' });
+      expect(body).not.toHaveProperty('haiku');
+      expect(body).not.toHaveProperty('commits');
+      // Nothing leaks: no upstream body, no token, no commit content.
       expect(res.body).not.toContain('commit secret');
       expect(res.body).not.toContain('ghp_test_operational_failure');
     } finally {
@@ -126,23 +154,24 @@ describe('owner auth on POST /api/owner', () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it('rejects a bad signature with 401', async () => {
-    const headers = { ...(await authHeaders(1)), 'x-githaiku-signature': '0xdeadbeef' };
+  it('rejects a bogus bearer token with 401', async () => {
+    const headers = { authorization: 'Bearer not.a.valid.jwt' };
     const res = await app.inject({ method: 'POST', url: '/api/owner', headers, payload: { githubLogin: 'someone' } });
     expect(res.statusCode).toBe(401);
   });
 
-  it('rejects a replayed nonce', async () => {
-    // Wallet 2: first request consumes the nonce; reusing it must 401 (replay),
-    // not 409 (the address has no owner yet on the first call).
+  it('accepts the SAME session JWT on repeated requests (single signature, no re-sign)', async () => {
+    // Wallet 2: one sign-in establishes a reusable session. The first POST
+    // creates the owner (201); a second request with the SAME bearer token is
+    // accepted (200 idempotent) — the JWT is not single-use, unlike the nonce.
     const headers = await authHeaders(2);
     const first = await app.inject({ method: 'POST', url: '/api/owner', headers, payload: { githubLogin: 'someone' } });
     expect(first.statusCode).toBe(201);
-    const replay = await app.inject({ method: 'POST', url: '/api/owner', headers, payload: { githubLogin: 'someone' } });
-    expect(replay.statusCode).toBe(401);
+    const second = await app.inject({ method: 'POST', url: '/api/owner', headers, payload: { githubLogin: 'someone' } });
+    expect(second.statusCode).toBe(200);
   });
 
-  it('creates an owner with a valid signature and never echoes the token', async () => {
+  it('creates an owner with a valid session and never echoes the token', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/owner',
@@ -264,6 +293,74 @@ describe('audit log', () => {
     expect(latest.codeId).toMatch(/^invalid:[0-9a-f]{16}$/);
     expect(latest.codeId).not.toBe(codeIdFor('guess-one'));
     expect(latest.codeId).not.toBe(codeIdFor('guess-two'));
+  });
+});
+
+describe('POST /api/preview (owner-authed full-pipeline preview)', () => {
+  // A valid GitHub commit-search response so a token-bearing owner's preview
+  // succeeds (github.ts reads /search/commits -> items[].commit.message).
+  const eventsFixture = JSON.stringify({
+    items: [
+      {
+        repository: { full_name: 'octocat/hello' },
+        commit: { message: 'feat: preview pipeline', author: { date: new Date().toISOString() } },
+      },
+    ],
+  });
+
+  it('rejects an unauthenticated preview with 401', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/preview' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('returns 404 (no_owner) when the authed address has no owner record', async () => {
+    // Wallet 6 has not created an owner yet.
+    const res = await app.inject({ method: 'POST', url: '/api/preview', headers: await authHeaders(6) });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('returns a guarded 3-line haiku for the authenticated owner (full pipeline)', async () => {
+    // Wallet 6: token-bearing owner so preview runs the real fetch path (mocked).
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/owner',
+      headers: await authHeaders(6),
+      payload: { githubLogin: 'octocat', githubToken: 'ghp_preview_success' },
+    });
+    expect(created.statusCode).toBe(201);
+
+    const realFetch = global.fetch;
+    global.fetch = (async () => new Response(eventsFixture, { status: 200 })) as typeof fetch;
+    try {
+      const res = await app.inject({ method: 'POST', url: '/api/preview', headers: await authHeaders(6) });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.allowed).toBe(true);
+      expect(body.haiku.lines).toHaveLength(3);
+      expect(body.proof.policy_id).toBe(EGRESS_POLICY_ID);
+      // No commit data leaks via the preview.
+      expect(body).not.toHaveProperty('commits');
+      expect(JSON.stringify(body)).not.toContain('feat:');
+      expect(res.body).not.toContain('ghp_preview_success');
+    } finally {
+      global.fetch = realFetch;
+    }
+  });
+
+  it('returns a staged guarded denial (github) when a pipeline stage fails, no leak', async () => {
+    // Same wallet-6 token owner; force the GitHub fetch to fail -> github stage.
+    const realFetch = global.fetch;
+    global.fetch = (async () => new Response('upstream leaked commit content', { status: 500 })) as typeof fetch;
+    try {
+      const res = await app.inject({ method: 'POST', url: '/api/preview', headers: await authHeaders(6) });
+      expect(res.statusCode).toBe(502);
+      const body = JSON.parse(res.body);
+      expect(body).toEqual({ allowed: false, reason: 'could not read your GitHub activity', stage: 'github' });
+      expect(res.body).not.toContain('leaked commit content');
+      expect(res.body).not.toContain('ghp_preview_success');
+    } finally {
+      global.fetch = realFetch;
+    }
   });
 });
 

@@ -9,14 +9,10 @@ import { APP_NAME, OPENKEY_HOST } from './config';
  * `@openkey/sdk@0.8.x` ships `OpenKeyProvider`, an EIP-1193 wrapper around a
  * connected `OpenKey` instance. It answers `personal_sign` / `eth_sign` /
  * `eth_accounts` / `signTypedData` by routing to the user's passkey-gated key —
- * which is exactly what:
- *   - TinyCloudWeb's SIWE `signIn()` needs (it calls personal_sign), and
- *   - the backend's owner-auth signature needs (a personal_sign over the
- *     canonical "Git Haiku owner authentication" message).
- *
- * We keep the raw `openkey` instance + `keyId` around so the backend SIWE-auth
- * signatures can be produced from the SAME signer (see signOwnerAuthMessage),
- * proving the single-signer combo end to end.
+ * which is exactly what TinyCloudWeb's SIWE `signIn()` needs (it calls
+ * personal_sign). That single sign-in signature also establishes the backend
+ * session (its SIWE message carries the backend nonce), so no second signer or
+ * per-request signature is needed.
  */
 
 export interface OpenKeySession {
@@ -52,20 +48,4 @@ export async function connectOpenKey(host: string = OPENKEY_HOST): Promise<OpenK
     openkey,
     web3Provider,
   };
-}
-
-/**
- * Produce the backend owner-auth signature with the SAME OpenKey signer.
- *
- * The backend (packages/backend/src/auth.ts) recovers the signer from a
- * personal_sign over `buildAuthMessage(nonce)` and burns the nonce. We sign
- * that exact message via `openkey.signMessage` (passkey-gated), giving the hex
- * signature the backend verifies — no wallet, no second signer.
- */
-export async function signOwnerAuthMessage(
-  session: Pick<OpenKeySession, 'openkey' | 'keyId'>,
-  message: string,
-): Promise<string> {
-  const result = await session.openkey.signMessage({ message, keyId: session.keyId });
-  return result.signature;
 }

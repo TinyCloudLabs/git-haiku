@@ -1,23 +1,26 @@
 import { useState } from 'react';
 
 import {
+  getOwner,
   registerOwner,
   sendDelegation,
   type OwnerResult,
   type OwnerAuthContext,
 } from '../api';
 import { signInOwner, type OwnerSession } from '../lib/ownerSession';
-import { putGithubToken, materializeBackendDelegation } from '../lib/tinycloud';
+import { putGithubToken, materializeBackendDelegation, setupOwnerRecap } from '../lib/tinycloud';
+import { verifyGithubToken, type GithubTokenResult } from '../lib/githubVerify';
 import { OwnerDashboard } from './OwnerDashboard';
 
 type Phase = 'signin' | 'setup' | 'dashboard';
 
 /**
  * The real owner flow:
- *   1. OpenKey passkey sign-in → TinyCloud session + signer
- *   2. consent + GitHub login/token → secrets.put(GITHUB_TOKEN) →
- *      register owner → materialize + POST the backend delegation
- *   3. dashboard: codes + audit
+ *   1. OpenKey passkey sign-in → backend session JWT (ONE lightweight signature)
+ *   2. get-or-route: an EXISTING owner goes straight to their dashboard with just
+ *      `{ auth, owner, did }` — NO heavy recap, NO token re-upload. A NEW owner
+ *      gets the setup form, which runs the heavy web-sdk recap on submit.
+ *   3. dashboard: codes + audit + preview
  */
 export function OwnerFlow() {
   const [phase, setPhase] = useState<Phase>('signin');
@@ -25,7 +28,14 @@ export function OwnerFlow() {
   const [owner, setOwner] = useState<OwnerResult | null>(null);
 
   if (phase === 'dashboard' && session && owner) {
-    return <OwnerDashboard auth={session.auth} owner={owner} did={session.did} />;
+    return (
+      <OwnerDashboard
+        auth={session.auth}
+        owner={owner}
+        did={session.did}
+        onRestoreToken={() => setPhase('setup')}
+      />
+    );
   }
 
   if (phase === 'setup' && session) {
@@ -42,9 +52,14 @@ export function OwnerFlow() {
 
   return (
     <SignInPhase
-      onSignedIn={(s) => {
+      onSignedIn={(s, existing) => {
         setSession(s);
-        setPhase('setup');
+        if (existing) {
+          setOwner(existing);
+          setPhase('dashboard');
+        } else {
+          setPhase('setup');
+        }
       }}
     />
   );
@@ -52,7 +67,11 @@ export function OwnerFlow() {
 
 // ── Phase 1: OpenKey sign-in ──────────────────────────────────────────
 
-function SignInPhase({ onSignedIn }: { onSignedIn: (s: OwnerSession) => void }) {
+function SignInPhase({
+  onSignedIn,
+}: {
+  onSignedIn: (s: OwnerSession, existing: OwnerResult | null) => void;
+}) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -60,7 +79,13 @@ function SignInPhase({ onSignedIn }: { onSignedIn: (s: OwnerSession) => void }) 
     setLoading(true);
     setError(null);
     try {
-      onSignedIn(await signInOwner());
+      // 1. OpenKey passkey sign-in. 2. get-or-route: an existing owner goes
+      // straight to their dashboard; a new address gets the setup form. A 404 in
+      // getOwner returns null (new owner); any other failure throws and is
+      // surfaced below — no silent fallback.
+      const s = await signInOwner();
+      const existing = await getOwner(s.auth);
+      onSignedIn(s, existing);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'sign-in failed');
     } finally {
@@ -76,7 +101,7 @@ function SignInPhase({ onSignedIn }: { onSignedIn: (s: OwnerSession) => void }) 
         token in <strong>your own</strong> TinyCloud secrets vault, and delegate exactly one
         capability to the attested backend: read &amp; decrypt that one secret.
       </p>
-      <button className="primary" onClick={signIn} disabled={loading}>
+      <button className="primary" data-testid="owner-signin" onClick={signIn} disabled={loading}>
         {loading ? 'Connecting…' : 'Sign in with OpenKey'}
       </button>
       {error && <div className="denial">{error}</div>}
@@ -84,7 +109,11 @@ function SignInPhase({ onSignedIn }: { onSignedIn: (s: OwnerSession) => void }) 
   );
 }
 
-// ── Phase 2: consent + secrets.put + register + delegate ──────────────
+// ── Phase 2: heavy recap + secrets.put + register + delegate ──────────
+//
+// Reached ONLY by a NEW owner (getOwner → null). The heavy web-sdk recap runs
+// HERE, on submit — never at login. The returning-owner dashboard path never
+// mounts this component, so it never pays for the recap.
 
 function SetupPhase({
   session,
@@ -99,14 +128,51 @@ function SetupPhase({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // Frontend-only token check (against api.github.com, never our backend).
+  const [verifying, setVerifying] = useState(false);
+  const [verifyResult, setVerifyResult] = useState<GithubTokenResult | null>(null);
+
+  // Re-typing the token invalidates a stale verification result.
+  function onTokenChange(value: string) {
+    setGithubToken(value);
+    if (verifyResult) setVerifyResult(null);
+  }
+
+  async function verify() {
+    setVerifying(true);
+    setVerifyResult(null);
+    try {
+      const result = await verifyGithubToken(githubToken);
+      setVerifyResult(result);
+      // Default the login to the verified account if the field is empty.
+      if (result.ok && !githubLogin.trim()) setGithubLogin(result.login);
+    } finally {
+      setVerifying(false);
+    }
+  }
+
+  // Block storing a token we KNOW is invalid (a checked-and-failed result).
+  const tokenKnownInvalid = verifyResult !== null && !verifyResult.ok;
+
   async function run(e: React.FormEvent) {
     e.preventDefault();
+    if (tokenKnownInvalid) {
+      setError('This token failed verification — fix it before storing.');
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
+      // 0. Heavy web-sdk recap (DEFERRED to here): compose the app + backend
+      //    manifests and run the full `signIn()` with the OpenKey provider. This
+      //    is the new owner's ONE extra signature beyond login — it authorizes
+      //    secrets.put + the backend delegation.
+      setStatus('Authorizing your TinyCloud vault + backend delegation…');
+      const recap = await setupOwnerRecap(session.openkey);
+
       // 1. Owner writes the token into their OWN TinyCloud secrets vault.
       setStatus('Encrypting your token into your TinyCloud vault…');
-      await putGithubToken(session.tcw, githubToken.trim());
+      await putGithubToken(recap.tcw, githubToken.trim());
 
       // 2. Register the owner record (binds the address; mints the first code).
       setStatus('Registering you with the backend…');
@@ -115,9 +181,9 @@ function SetupPhase({
       // 3. Materialize + send the KV-get+decrypt delegation to the backend DID.
       setStatus('Delegating read-only secret access to the attested backend…');
       const serialized = await materializeBackendDelegation(
-        session.tcw,
-        session.backendDid,
-        session.composedRequest,
+        recap.tcw,
+        recap.backendDid,
+        recap.composedRequest,
       );
       const delegation = await sendDelegation(session.auth, {
         ownerId: ownerResult.ownerId,
@@ -143,7 +209,7 @@ function SetupPhase({
           <li>Your GitHub token is encrypted into your own TinyCloud secrets vault.</li>
           <li>
             You delegate <strong>only</strong> read + decrypt of that one secret to the backend&apos;s
-            attested identity (<code className="mono">{short(session.backendDid)}</code>).
+            attested identity.
           </li>
           <li>
             The backend can <strong>only</strong> emit three-line haikus from your commit messages —
@@ -158,6 +224,7 @@ function SetupPhase({
           <span>GitHub login (whose commits the haiku describes)</span>
           <input
             className="input"
+            data-testid="setup-github-login"
             value={githubLogin}
             onChange={(e) => setGithubLogin(e.target.value)}
             placeholder="octocat"
@@ -167,14 +234,31 @@ function SetupPhase({
           <span>GitHub token (stored in YOUR vault, never sent to us in the clear)</span>
           <input
             className="input mono"
+            data-testid="setup-github-token"
             type="password"
             value={githubToken}
-            onChange={(e) => setGithubToken(e.target.value)}
+            onChange={(e) => onTokenChange(e.target.value)}
             placeholder="ghp_…"
           />
+          <div className="row">
+            <button
+              type="button"
+              className="ghost small"
+              onClick={() => void verify()}
+              disabled={verifying || !githubToken.trim()}
+            >
+              {verifying ? 'Verifying…' : 'Verify token'}
+            </button>
+            <span className="muted token-verify-hint">Checks GitHub directly — your token never leaves your browser for this.</span>
+          </div>
+          {verifyResult && <TokenVerifyResult result={verifyResult} />}
           <TokenHelp />
         </label>
-        <button className="primary" disabled={busy || !githubLogin.trim() || !githubToken.trim()}>
+        <button
+          className="primary"
+          data-testid="setup-authorize"
+          disabled={busy || !githubLogin.trim() || !githubToken.trim() || tokenKnownInvalid}
+        >
           {busy ? 'Working…' : 'Authorize & generate code'}
         </button>
       </form>
@@ -182,6 +266,45 @@ function SetupPhase({
       {status && <p className="muted status">{status}</p>}
       {error && <div className="denial">{error}</div>}
     </section>
+  );
+}
+
+// ── GitHub token verification result ──────────────────────────────────
+
+/**
+ * Renders the outcome of the frontend-only GitHub token check. Valid → green
+ * state with login + scopes (or a fine-grained note). Invalid → clear error
+ * pointing at the existing token-help links below.
+ */
+function TokenVerifyResult({ result }: { result: GithubTokenResult }) {
+  if (!result.ok) {
+    return (
+      <div className="denial token-verify">
+        <strong>Invalid or insufficient token.</strong> {result.message} Create a new one with the
+        links below.
+      </div>
+    );
+  }
+
+  return (
+    <div className="token-verify valid">
+      <p>
+        <span className="ok-tick">✓</span> Valid — authenticated as{' '}
+        <strong>{result.login}</strong>.
+      </p>
+      <p className="muted">
+        {result.scopes === null
+          ? 'Fine-grained token (GitHub does not expose its scopes here).'
+          : result.scopes.length === 0
+            ? 'Classic token with no scopes (read-only of public data).'
+            : `Scopes: ${result.scopes.join(', ')}`}
+      </p>
+      <p className="muted">
+        {result.canReadRepos
+          ? 'Confirmed read access to your repositories.'
+          : 'Note: could not confirm repository read access — fine for public-only sources.'}
+      </p>
+    </div>
   );
 }
 
@@ -231,10 +354,6 @@ function TokenHelp() {
       </details>
     </div>
   );
-}
-
-function short(did: string): string {
-  return did.length > 28 ? `${did.slice(0, 18)}…${did.slice(-8)}` : did;
 }
 
 export type { OwnerAuthContext };

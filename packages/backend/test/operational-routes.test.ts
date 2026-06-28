@@ -29,11 +29,11 @@ describe('public operational routes', () => {
     expect(JSON.parse(res.body)).toEqual({ ok: true });
   });
 
-  it('/api/server-info does not disclose provider state outside tc-cli mode', async () => {
+  it('/api/server-info does not disclose provider state outside sdk mode', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/server-info' });
     expect(res.statusCode).toBe(404);
     expect(JSON.parse(res.body)).toEqual({ error: 'not_found' });
-    expect(res.body).not.toContain('tc-cli');
+    expect(res.body).not.toContain('sdk');
     expect(res.body).not.toContain('local');
   });
 

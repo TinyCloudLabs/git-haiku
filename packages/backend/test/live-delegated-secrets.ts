@@ -1,5 +1,5 @@
 /**
- * LIVE end-to-end integration for the tc-cli delegated-secrets path.
+ * LIVE end-to-end integration for the sdk delegated-secrets path.
  *
  * GATED: only runs with GITHAIKU_LIVE=1 (never in the default headless test
  * run). NOT mocked — stands up a real local tinycloud-node, uses a real OWNER
@@ -8,8 +8,9 @@
  * (vault/secrets/scoped/githaiku/GITHUB_TOKEN) + decrypt to the BACKEND's stable
  * did:pkh (audience = pkh, the proven fix), delivers the delegation to the
  * backend (POST /api/delegations), and triggers the haiku flow so the backend
- * reads GITHUB_TOKEN via the REAL `tc … --scope githaiku` CLI. The RedPill LLM
- * key is backend config, NOT an owner secret.
+ * reads GITHUB_TOKEN via the node-SDK delegated read (useDelegation -> KV get
+ * -> decryptEnvelope), the same mechanism the `listen` server uses. The RedPill
+ * LLM key is backend config, NOT an owner secret.
  *
  *   GITHAIKU_LIVE=1 pnpm --filter @githaiku/backend tsx test/live-delegated-secrets.ts
  *
@@ -115,7 +116,7 @@ async function main(): Promise<void> {
   // The backend identity, store, and provider all read config from env. Point
   // them at the local node + backend key + a fresh app data dir BEFORE importing
   // the backend modules (config is read at import time).
-  process.env['GITHAIKU_SECRETS_PROVIDER'] = 'tc-cli';
+  process.env['GITHAIKU_SECRETS_PROVIDER'] = 'sdk';
   process.env['GITHAIKU_NODE_HOST'] = NODE_HOST;
   process.env['GITHAIKU_BACKEND_PRIVATE_KEY'] = BACKEND_KEY;
   process.env['GITHAIKU_DATA_DIR'] = appDataDir;
@@ -156,8 +157,8 @@ async function main(): Promise<void> {
     }
 
     // One multi-resource delegation: KV-get on GITHUB_TOKEN + decrypt. Audience
-    // is the backend's STABLE did:pkh (the proven fix). node-sdk 2.3.1-beta.0
-    // activates this multi-resource delegation correctly.
+    // is the backend's STABLE did:pkh (the proven fix). The sdk provider
+    // re-scopes + activates this multi-resource delegation via useDelegation.
     const delegation = await owner.delegateTo(backend.did, [
       {
         service: 'tinycloud.kv',
@@ -177,7 +178,6 @@ async function main(): Promise<void> {
     // --- Backend server: create owner, deliver delegation, run haiku -----
     const { buildServer } = await import('../src/server');
     const { createOwner } = await import('../src/store');
-    const { buildAuthMessage } = await import('../src/auth');
     const app = await buildServer();
     await app.ready();
 
@@ -191,17 +191,37 @@ async function main(): Promise<void> {
     const info = await app.inject({ method: 'GET', url: '/api/server-info' });
     log(`server-info: ${info.body}`);
 
-    // The owner signs a SIWE-style auth payload (proves control of the address).
+    // The owner signs in ONCE with a SIWE message embedding the address-bound
+    // nonce; /api/auth/verify returns a session JWT used as a bearer token.
     const { privateKeyToAccount } = await import('viem/accounts');
+    const { SiweMessage } = await import('siwe');
     const ownerAcct = privateKeyToAccount(OWNER_KEY as `0x${string}`);
-    const nonceRes = await app.inject({ method: 'GET', url: '/api/auth/nonce' });
+    const nonceRes = await app.inject({
+      method: 'GET',
+      url: `/api/auth/nonce?address=${ownerAcct.address}`,
+    });
     const { nonce } = JSON.parse(nonceRes.body) as { nonce: string };
-    const signature = await ownerAcct.signMessage({ message: buildAuthMessage(nonce) });
-    const authHeaders = {
-      'x-githaiku-address': ownerAcct.address,
-      'x-githaiku-nonce': nonce,
-      'x-githaiku-signature': signature,
-    };
+    const siweMessage = new SiweMessage({
+      domain: 'localhost',
+      address: ownerAcct.address,
+      statement: 'Git Haiku owner sign-in',
+      uri: 'http://localhost',
+      version: '1',
+      chainId: 1,
+      nonce,
+      issuedAt: new Date().toISOString(),
+    }).prepareMessage();
+    const signature = await ownerAcct.signMessage({ message: siweMessage });
+    const verifyRes = await app.inject({
+      method: 'POST',
+      url: '/api/auth/verify',
+      payload: { message: siweMessage, signature },
+    });
+    if (verifyRes.statusCode !== 200) {
+      throw new Error(`POST /api/auth/verify failed: ${verifyRes.statusCode} ${verifyRes.body}`);
+    }
+    const { token } = JSON.parse(verifyRes.body) as { token: string };
+    const authHeaders = { authorization: `Bearer ${token}` };
 
     // POST the delegation (owner-authenticated via headers).
     const delRes = await app.inject({
@@ -215,19 +235,19 @@ async function main(): Promise<void> {
     }
     log(`delegation accepted: ${delRes.body}`);
 
-    // Directly exercise the tc-cli provider so we PROVE GITHUB_TOKEN was read
-    // via the real `tc` binary under the delegation.
+    // Directly exercise the sdk provider so we PROVE GITHUB_TOKEN was read
+    // via the node-SDK delegated read (useDelegation -> KV get -> decrypt).
     const { makeSecretsProvider } = await import('../src/secrets');
     const { findOwnerById } = await import('../src/store');
     const provider = makeSecretsProvider();
-    if (provider.kind !== 'tc-cli') throw new Error(`expected tc-cli provider, got ${provider.kind}`);
+    if (provider.kind !== 'sdk') throw new Error(`expected sdk provider, got ${provider.kind}`);
     const ownerRecord = findOwnerById(created.ownerId)!;
     const read = await provider.getOwnerSecrets(ownerRecord);
 
     if (read.githubToken !== GITHUB_TOKEN) {
       throw new Error(`GITHUB_TOKEN mismatch: got ${JSON.stringify(read.githubToken)}`);
     }
-    log('PROVED: backend read GITHUB_TOKEN via the real tc CLI under the delegation.');
+    log('PROVED: backend read GITHUB_TOKEN via the node-SDK delegated read under the delegation.');
 
     // Trigger the guarded haiku flow end-to-end through the real /api/haiku
     // endpoint. With a fixture GITHUB_TOKEN the GitHub fetch 401s -> guarded

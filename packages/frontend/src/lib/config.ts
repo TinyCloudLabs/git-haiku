@@ -18,7 +18,16 @@ export const BACKEND_URL: string = (import.meta.env.VITE_BACKEND_URL ?? '').repl
 /** OpenKey instance the owner authenticates against. */
 export const OPENKEY_HOST: string = import.meta.env.VITE_OPENKEY_HOST ?? 'https://openkey.so';
 
-/** Optional explicit TinyCloud node host(s) for the owner's web-sdk session. */
+/**
+ * The TinyCloud node host(s) for the owner's web-sdk session.
+ *
+ * OPTIONAL — only set when `VITE_TINYCLOUD_HOST` is provided as an explicit
+ * override (self-hosted/staging nodes). Otherwise left `undefined` so the
+ * web-sdk resolves the node itself (registry lookup → `node.tinycloud.xyz`
+ * fallback). As of web-sdk 2.4.0-beta.11, restored sessions rehydrate their
+ * `tinycloudHosts` too, so no hardcoded host is needed to make a restored
+ * session usable for secrets/space/encryption calls. Mirrors listen.
+ */
 const TINYCLOUD_HOST = import.meta.env.VITE_TINYCLOUD_HOST as string | undefined;
 export const TINYCLOUD_HOSTS: string[] | undefined = TINYCLOUD_HOST ? [TINYCLOUD_HOST] : undefined;
 

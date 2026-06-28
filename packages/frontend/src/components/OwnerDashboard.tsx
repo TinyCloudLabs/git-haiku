@@ -12,6 +12,7 @@ import {
   type OwnerAuthContext,
   type OwnerResult,
 } from '../api';
+import { PreviewHaiku } from './PreviewHaiku';
 
 /**
  * Owner dashboard: mint / list / rotate / revoke secret codes, show share URLs,
@@ -21,10 +22,13 @@ export function OwnerDashboard({
   auth,
   owner,
   did,
+  onRestoreToken,
 }: {
   auth: OwnerAuthContext;
   owner: OwnerResult;
   did: string;
+  /** Switch to the setup phase to rotate/re-store the GitHub token (heavy recap). */
+  onRestoreToken: () => void;
 }) {
   const [codes, setCodes] = useState<CodeSummary[] | null>(null);
   const [audit, setAudit] = useState<AuditEntry[] | null>(null);
@@ -44,8 +48,12 @@ export function OwnerDashboard({
   }, [auth]);
 
   // Seed with the first code minted at registration so the owner sees it once.
+  // A returning owner has no plaintext code (secretCode === ''); they just see
+  // their existing codes list via refresh(), not a bogus "new code" card.
   useEffect(() => {
-    setJustMinted({ codeId: owner.codeId, secretCode: owner.secretCode });
+    if (owner.secretCode) {
+      setJustMinted({ codeId: owner.codeId, secretCode: owner.secretCode });
+    }
     void refresh();
   }, [owner, refresh]);
 
@@ -84,8 +92,17 @@ export function OwnerDashboard({
       <div className="card">
         <h2>Owner dashboard</h2>
         <p className="muted">
-          Signed in as <code className="mono">{shortDid(did)}</code> · GitHub{' '}
-          <strong>{owner.githubLogin}</strong>
+          Signed in as{' '}
+          <code className="mono" data-testid="owner-address">
+            {shortDid(did)}
+          </code>{' '}
+          · GitHub <strong>{owner.githubLogin}</strong>
+          {owner.hasGithubToken && (
+            <>
+              {' '}
+              · <span className="ok-tick">✓</span> token stored
+            </>
+          )}
         </p>
         <div className="row">
           <button className="primary" onClick={onMint} disabled={busy}>
@@ -97,11 +114,21 @@ export function OwnerDashboard({
           <button className="ghost" onClick={() => void refresh()} disabled={busy}>
             Refresh
           </button>
+          <button
+            className="ghost"
+            data-testid="dashboard-restore-token"
+            onClick={onRestoreToken}
+            disabled={busy}
+          >
+            Rotate / re-store GitHub token
+          </button>
         </div>
         {error && <div className="denial">{error}</div>}
       </div>
 
       {justMinted && <NewCodeCard owner={owner.ownerId} minted={justMinted} />}
+
+      <PreviewHaiku auth={auth} />
 
       <div className="card">
         <h3>Codes</h3>
