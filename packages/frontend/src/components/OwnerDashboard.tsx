@@ -33,6 +33,7 @@ export function OwnerDashboard({
   const [codes, setCodes] = useState<CodeSummary[] | null>(null);
   const [audit, setAudit] = useState<AuditEntry[] | null>(null);
   const [justMinted, setJustMinted] = useState<MintedCode | null>(null);
+  const [copiedCodeId, setCopiedCodeId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -86,6 +87,17 @@ export function OwnerDashboard({
       await revokeCode(auth, codeId);
       await refresh();
     });
+
+  async function copyShareUrl(code: CodeSummary) {
+    if (!code.secretCode) return;
+    try {
+      await navigator.clipboard.writeText(shareUrlFor(owner.ownerId, code.secretCode));
+      setCopiedCodeId(code.codeId);
+      setTimeout(() => setCopiedCodeId(null), 1500);
+    } catch {
+      setCopiedCodeId(null);
+    }
+  }
 
   return (
     <section className="stack">
@@ -143,6 +155,7 @@ export function OwnerDashboard({
                 <th>Code id</th>
                 <th>Created</th>
                 <th>Status</th>
+                <th>Share URL</th>
                 <th />
               </tr>
             </thead>
@@ -152,6 +165,21 @@ export function OwnerDashboard({
                   <td className="mono">{c.codeId}</td>
                   <td>{new Date(c.createdAt).toLocaleString()}</td>
                   <td>{c.active ? 'active' : `revoked ${new Date(c.revokedAt!).toLocaleDateString()}`}</td>
+                  <td>
+                    {c.active && c.secretCode ? (
+                      <button
+                        className="ghost small"
+                        data-testid={`copy-share-url-${c.codeId}`}
+                        onClick={() => void copyShareUrl(c)}
+                      >
+                        {copiedCodeId === c.codeId ? 'Copied' : 'Copy URL'}
+                      </button>
+                    ) : c.active ? (
+                      <span className="muted">Unavailable</span>
+                    ) : (
+                      <span className="muted">Revoked</span>
+                    )}
+                  </td>
                   <td>
                     {c.active && (
                       <button className="ghost small" onClick={() => onRevoke(c.codeId)} disabled={busy}>
@@ -200,8 +228,7 @@ export function OwnerDashboard({
 }
 
 function NewCodeCard({ owner, minted }: { owner: string; minted: MintedCode }) {
-  const origin = typeof window !== 'undefined' ? window.location.origin : '';
-  const shareUrl = `${origin}/u/${owner}?code=${minted.secretCode}`;
+  const shareUrl = shareUrlFor(owner, minted.secretCode);
   const [copied, setCopied] = useState<'code' | 'url' | null>(null);
 
   async function copy(text: string, what: 'code' | 'url') {
@@ -235,6 +262,11 @@ function NewCodeCard({ owner, minted }: { owner: string; minted: MintedCode }) {
       </label>
     </div>
   );
+}
+
+function shareUrlFor(ownerId: string, secretCode: string): string {
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  return `${origin}/u/${ownerId}?code=${encodeURIComponent(secretCode)}`;
 }
 
 function shortDid(did: string): string {

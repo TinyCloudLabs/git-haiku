@@ -86,6 +86,7 @@ export interface CodeSummary {
   createdAt: string;
   revokedAt: string | null;
   active: boolean;
+  secretCode: string | null;
 }
 
 export interface MintedCode {

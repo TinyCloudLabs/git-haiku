@@ -14,9 +14,9 @@ import { config } from './config';
  * with no infra.
  *
  * SECRET CODES: an owner can hold MULTIPLE codes (create / revoke / rotate).
- * Only a sha256 HASH of each code is stored — the plaintext is shown ONCE at
- * creation/rotation and never persisted. Validation hashes the submitted code
- * and compares it constant-time against every active hash.
+ * Code validation uses a sha256 hash and constant-time comparison. New records
+ * also keep the plaintext secret code so owners can copy share URLs later; older
+ * hash-only records remain valid but cannot be reconstructed into share URLs.
  *
  * The file is written under config.dataDir which is in .gitignore.
  */
@@ -24,8 +24,10 @@ import { config } from './config';
 export interface SecretCodeRecord {
   /** Stable id (sha256 prefix of the code) for revoke/audit without plaintext. */
   codeId: string;
-  /** sha256(code) hex. The plaintext is never stored. */
+  /** sha256(code) hex. */
   hash: string;
+  /** Plaintext share code for owner copy UX. Older records may not have it. */
+  secretCode?: string;
   createdAt: string;
   /** ISO string once revoked; null while active. */
   revokedAt: string | null;
@@ -91,7 +93,13 @@ function newCodeRecord(): { record: SecretCodeRecord; plaintext: string } {
   const hash = hashCode(plaintext);
   return {
     plaintext,
-    record: { codeId: codeIdFromHash(hash), hash, createdAt: new Date().toISOString(), revokedAt: null },
+    record: {
+      codeId: codeIdFromHash(hash),
+      hash,
+      secretCode: plaintext,
+      createdAt: new Date().toISOString(),
+      revokedAt: null,
+    },
   };
 }
 
@@ -176,6 +184,8 @@ export interface CodeSummary {
   createdAt: string;
   revokedAt: string | null;
   active: boolean;
+  /** Present for active codes minted after plaintext retention was added. */
+  secretCode: string | null;
 }
 
 function summarize(code: SecretCodeRecord): CodeSummary {
@@ -184,10 +194,11 @@ function summarize(code: SecretCodeRecord): CodeSummary {
     createdAt: code.createdAt,
     revokedAt: code.revokedAt,
     active: code.revokedAt === null,
+    secretCode: code.revokedAt === null ? (code.secretCode ?? null) : null,
   };
 }
 
-/** List an owner's codes (metadata only — never the hash or plaintext). */
+/** List an owner's codes (never the hash; plaintext is owner-authenticated only). */
 export function listCodes(ownerId: string): CodeSummary[] {
   const owner = findOwnerById(ownerId);
   if (!owner) throw new Error('unknown owner');

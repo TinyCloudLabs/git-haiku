@@ -209,6 +209,7 @@ describe('code management (create / revoke / rotate)', () => {
     const list1 = await app.inject({ method: 'GET', url: '/api/codes', headers: await authHeaders(4) });
     expect(JSON.parse(list1.body).codes).toHaveLength(1);
     expect(JSON.parse(list1.body).codes[0]).not.toHaveProperty('hash');
+    expect(JSON.parse(list1.body).codes[0].secretCode).toBe(firstCode);
 
     // Create a second code; both work.
     const create2 = await app.inject({ method: 'POST', url: '/api/codes', headers: await authHeaders(4) });
