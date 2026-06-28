@@ -297,15 +297,16 @@ describe('audit log', () => {
 });
 
 describe('POST /api/preview (owner-authed full-pipeline preview)', () => {
-  // A valid GitHub events fixture so a token-bearing owner's preview succeeds.
-  const eventsFixture = JSON.stringify([
-    {
-      type: 'PushEvent',
-      created_at: new Date().toISOString(),
-      repo: { name: 'octocat/hello' },
-      payload: { commits: [{ message: 'feat: preview pipeline' }] },
-    },
-  ]);
+  // A valid GitHub commit-search response so a token-bearing owner's preview
+  // succeeds (github.ts reads /search/commits -> items[].commit.message).
+  const eventsFixture = JSON.stringify({
+    items: [
+      {
+        repository: { full_name: 'octocat/hello' },
+        commit: { message: 'feat: preview pipeline', author: { date: new Date().toISOString() } },
+      },
+    ],
+  });
 
   it('rejects an unauthenticated preview with 401', async () => {
     const res = await app.inject({ method: 'POST', url: '/api/preview' });
