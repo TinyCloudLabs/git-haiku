@@ -213,16 +213,20 @@ function SetupPhase({
       <div className="consent">
         <h3>What you&apos;re authorizing</h3>
         <ul>
-          <li>Your GitHub token is encrypted into your own TinyCloud secrets vault.</li>
+          <li>Your GitHub token is encrypted into your TinyCloud Secrets vault under your identity.</li>
           <li>
-            You delegate <strong>only</strong> read + decrypt of that one secret to the backend&apos;s
-            attested identity.
+            You grant the attested backend read + decrypt access to <strong>only</strong> that one
+            secret.
           </li>
           <li>
-            The backend can <strong>only</strong> emit three-line haikus from your commit messages —
-            the egress guard blocks everything else.
+            The backend uses it only to read commit metadata: messages, repo names, and timestamps.
+            It never reads file contents or diffs.
           </li>
-          <li>The delegation expires automatically (~90 days). Revoke any time by rotating codes.</li>
+          <li>
+            Outputs are constrained to haikus and weekly reports. Denials and errors never include
+            raw commits or token data.
+          </li>
+          <li>Shared access is controlled by your codes; rotate or revoke codes any time.</li>
         </ul>
       </div>
 
@@ -278,7 +282,7 @@ function TokenVerifyResult({ result }: { result: GithubTokenResult }) {
     return (
       <div className="denial token-verify">
         <strong>Invalid or insufficient token.</strong> {result.message} Create a new one with the
-        links below.
+        guidance below.
       </div>
     );
   }
@@ -316,36 +320,35 @@ function TokenHelp() {
   return (
     <div className="token-help muted">
       <p className="token-help-line">
-        Create one:{' '}
+        Recommended:{' '}
         <a
           href="https://github.com/settings/personal-access-tokens/new"
           target="_blank"
           rel="noopener noreferrer"
         >
-          fine-grained token
-        </a>{' '}
-        (recommended) or{' '}
-        <a href="https://github.com/settings/tokens/new" target="_blank" rel="noopener noreferrer">
-          classic token
+          create a fine-grained token
         </a>
-        .
+        . Select the repositories you want summarized, then grant{' '}
+        <code className="mono">Contents: Read-only</code> and{' '}
+        <code className="mono">Metadata: Read-only</code>. Git Haiku reads commit metadata only,
+        never file contents or diffs.
       </p>
       <details className="token-help-details">
-        <summary>What permissions?</summary>
+        <summary>Alternate permissions for classic tokens</summary>
         <p>
-          Git Haiku reads <strong>only commit metadata</strong> — messages, repo names, timestamps.
-          Never file contents or diffs. Grant the minimum:
+          Use a classic token only if fine-grained tokens do not work for your account or
+          organization. Classic scopes are broader:
         </p>
         <ul>
           <li>
-            <strong>Fine-grained (recommended):</strong> Repository access = the repos you want
-            summarized (or all). Permissions → <code className="mono">Contents: Read-only</code> and{' '}
-            <code className="mono">Metadata: Read-only</code> (Metadata is mandatory).
+            Private repositories: grant <code className="mono">repo</code>.
           </li>
           <li>
-            <strong>Classic (alt):</strong> <code className="mono">repo</code> scope for private
-            repos, or <code className="mono">public_repo</code> for public-only. Read access is all
-            that&apos;s used.
+            Public repositories only: grant <code className="mono">public_repo</code>.
+          </li>
+          <li>
+            Git Haiku still uses only commit metadata, even when GitHub requires a broader classic
+            scope.
           </li>
         </ul>
       </details>

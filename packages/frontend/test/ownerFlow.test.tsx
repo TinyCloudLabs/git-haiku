@@ -142,7 +142,7 @@ describe('OwnerFlow', () => {
     expect(tokenLink).toBeTruthy();
     expect(tokenLink!.getAttribute('target')).toBe('_blank');
     expect(tokenLink!.getAttribute('rel')).toBe('noopener noreferrer');
-    expect(screen.getByText(/what permissions\?/i)).toBeTruthy();
+    expect(screen.getByText(/alternate permissions for classic tokens/i)).toBeTruthy();
 
     await user.type(screen.getByPlaceholderText('ghp_…'), 'ghp_secret_token');
     await user.click(screen.getByRole('button', { name: /authorize & generate code/i }));
