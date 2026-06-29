@@ -121,7 +121,25 @@ describe('bearer-token authed calls', () => {
     expect(captured.method).toBe('POST');
     expect(captured.url).toContain('/api/reports/last-week');
     expect(captured.headers!.authorization).toBe(`Bearer ${auth.token}`);
+    expect(JSON.parse(captured.body!)).toEqual({ force: false });
     expect(report.overview).toMatch(/focused/);
+  });
+
+  it('can force-regenerate the owner report', async () => {
+    const { captured } = mockBackend({
+      githubLogin: 'octocat',
+      generatedAt: '2026-06-29T00:01:00Z',
+      range: { start: '2026-06-22', end: '2026-06-28' },
+      commitCount: 0,
+      generatedBy: 'deterministic',
+      overview: 'Regenerated.',
+      days: [],
+    });
+
+    await generateLastWeekReport(auth, { force: true });
+
+    expect(captured.url).toContain('/api/reports/last-week');
+    expect(JSON.parse(captured.body!)).toEqual({ force: true });
   });
 });
 
@@ -142,8 +160,26 @@ describe('previewHaiku', () => {
     expect(captured.method).toBe('POST');
     expect(captured.url).toContain('/api/preview');
     expect(captured.headers!.authorization).toBe(`Bearer ${auth.token}`);
+    expect(JSON.parse(captured.body!)).toEqual({ force: false });
     expect(res.allowed).toBe(true);
     if (res.allowed) expect(res.haiku.lines).toHaveLength(3);
+  });
+
+  it('can force-regenerate the owner preview haiku', async () => {
+    const { captured } = mockBackend(
+      {
+        allowed: true,
+        haiku: { lines: ['one two three four five', 'six seven eight nine ten eleven', 'twelve thirteen'] },
+        author: { githubLogin: 'octocat' },
+        proof: { policy_id: 'p', image_digest: null, attestation_url: null },
+      },
+      200,
+    );
+
+    await previewHaiku(auth, { force: true });
+
+    expect(captured.url).toContain('/api/preview');
+    expect(JSON.parse(captured.body!)).toEqual({ force: true });
   });
 
   it('returns the staged denial body on a non-2xx response', async () => {

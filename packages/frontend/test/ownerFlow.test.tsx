@@ -262,9 +262,12 @@ describe('OwnerFlow', () => {
     await screen.findByText(/owner dashboard/i);
     await user.click(screen.getByRole('button', { name: /preview \/ test haiku/i }));
 
-    expect(previewHaiku).toHaveBeenCalledOnce();
+    expect(previewHaiku).toHaveBeenCalledWith(expect.objectContaining({ token: 'jwt-token' }), { force: false });
     await screen.findByText(/autumn commit lands/i);
     expect(screen.getByText(/merge into the main/i)).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: /regenerate haiku/i }));
+    expect(previewHaiku).toHaveBeenLastCalledWith(expect.objectContaining({ token: 'jwt-token' }), { force: true });
   });
 
   it('generates a last-week report from the dashboard', async () => {
@@ -283,11 +286,14 @@ describe('OwnerFlow', () => {
     await screen.findByText(/owner dashboard/i);
     await user.click(screen.getByRole('button', { name: /what did i do last week/i }));
 
-    expect(generateLastWeekReport).toHaveBeenCalledWith(expect.objectContaining({ token: 'jwt-token' }));
+    expect(generateLastWeekReport).toHaveBeenCalledWith(expect.objectContaining({ token: 'jwt-token' }), { force: false });
     await screen.findByText(/last week report/i);
     expect(screen.getByText(/shipped a focused weekly report flow/i)).toBeTruthy();
     expect(screen.getByText(/Monday · 2026-06-22/)).toBeTruthy();
     expect(screen.getByText(/hello: feat: add report/i)).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: /regenerate report/i }));
+    expect(generateLastWeekReport).toHaveBeenLastCalledWith(expect.objectContaining({ token: 'jwt-token' }), { force: true });
   });
 
   it('shows a stage-keyed message when preview fails', async () => {

@@ -83,6 +83,31 @@ afterAll(async () => {
   await app.close();
 });
 
+function allAuditEntries(): Array<{ codeId: string; ownerId: string | null; reason: string }> {
+  const path = join(DATA_DIR, 'audit.log.jsonl');
+  if (!existsSync(path)) return [];
+  return readFileSync(path, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as { codeId: string; ownerId: string | null; reason: string });
+}
+
+function previousWeekCommitFixture(message: string): string {
+  const day = new Date();
+  day.setUTCHours(0, 0, 0, 0);
+  const currentWeekStart = new Date(day.getTime() - ((day.getUTCDay() + 6) % 7) * 24 * 60 * 60 * 1000);
+  const previousWeekStart = new Date(currentWeekStart.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const commitDate = new Date(previousWeekStart.getTime() + 12 * 60 * 60 * 1000).toISOString();
+  return JSON.stringify({
+    items: [
+      {
+        repository: { full_name: 'octocat/hello' },
+        commit: { message, author: { date: commitDate } },
+      },
+    ],
+  });
+}
+
 describe('POST /api/haiku', () => {
   it('returns a guarded 3-line haiku for a valid code', async () => {
     const res = await app.inject({ method: 'POST', url: '/api/haiku', payload: { code: secretCode } });
@@ -104,6 +129,15 @@ describe('POST /api/haiku', () => {
     const a = await app.inject({ method: 'POST', url: '/api/haiku', payload: { code: secretCode } });
     const b = await app.inject({ method: 'POST', url: '/api/haiku', payload: { code: secretCode } });
     expect(JSON.parse(a.body).haiku.lines).toEqual(JSON.parse(b.body).haiku.lines);
+  });
+
+  it('reuses the cached haiku when commits are unchanged', async () => {
+    const owner = createOwner({ githubLogin: 'cacheowner' });
+    await app.inject({ method: 'POST', url: '/api/haiku', payload: { code: owner.secretCode } });
+    await app.inject({ method: 'POST', url: '/api/haiku', payload: { code: owner.secretCode } });
+
+    const ownerEntries = allAuditEntries().filter((entry) => entry.ownerId === owner.ownerId);
+    expect(ownerEntries.at(-1)?.reason).toBe('cache_hit');
   });
 
   it('returns a clean denial with NO commit data for a wrong code', async () => {
@@ -233,6 +267,41 @@ describe('POST /api/reports/last-week', () => {
       global.fetch = realFetch;
     }
   });
+
+  it('reuses the cached report on unchanged commits and lets the owner force regeneration', async () => {
+    const headers = await authHeaders(0);
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/owner',
+      headers,
+      payload: { githubLogin: 'octocat', githubToken: 'ghp_report_cache' },
+    });
+    expect(created.statusCode).toBe(201);
+
+    const realFetch = global.fetch;
+    global.fetch = (async () => new Response(previousWeekCommitFixture('feat: cache weekly report'), { status: 200 })) as typeof fetch;
+    try {
+      const first = await app.inject({ method: 'POST', url: '/api/reports/last-week', headers });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const cached = await app.inject({ method: 'POST', url: '/api/reports/last-week', headers });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const forced = await app.inject({
+        method: 'POST',
+        url: '/api/reports/last-week',
+        headers,
+        payload: { force: true },
+      });
+
+      const firstBody = JSON.parse(first.body);
+      const cachedBody = JSON.parse(cached.body);
+      const forcedBody = JSON.parse(forced.body);
+      expect(cachedBody.generatedAt).toBe(firstBody.generatedAt);
+      expect(forcedBody.generatedAt).not.toBe(firstBody.generatedAt);
+      expect(cached.body).not.toContain('ghp_report_cache');
+    } finally {
+      global.fetch = realFetch;
+    }
+  });
 });
 
 describe('POST /api/reports/last-week/share', () => {
@@ -330,15 +399,6 @@ describe('code management (create / revoke / rotate)', () => {
 });
 
 describe('audit log', () => {
-  function allAuditEntries(): Array<{ codeId: string; ownerId: string | null; reason: string }> {
-    const path = join(DATA_DIR, 'audit.log.jsonl');
-    if (!existsSync(path)) return [];
-    return readFileSync(path, 'utf8')
-      .split('\n')
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as { codeId: string; ownerId: string | null; reason: string });
-  }
-
   it('records allow/deny entries with NO secrets or commit data', async () => {
     // Wallet 5 = this owner.
     const created = await app.inject({

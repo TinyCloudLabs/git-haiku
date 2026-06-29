@@ -94,11 +94,11 @@ export function OwnerDashboard({
       await refresh();
     });
 
-  async function onWeeklyReport() {
+  async function onWeeklyReport(force = false) {
     setReportBusy(true);
     setReportError(null);
     try {
-      setWeeklyReport(await generateLastWeekReport(auth));
+      setWeeklyReport(await generateLastWeekReport(auth, { force }));
     } catch (err) {
       setReportError(err instanceof Error ? err.message : 'failed to generate report');
     } finally {
@@ -161,6 +161,16 @@ export function OwnerDashboard({
           >
             {reportBusy ? 'Writing report…' : 'What did I do last week?'}
           </button>
+          {weeklyReport && (
+            <button
+              className="ghost"
+              data-testid="weekly-report-regenerate"
+              onClick={() => void onWeeklyReport(true)}
+              disabled={reportBusy}
+            >
+              Regenerate report
+            </button>
+          )}
         </div>
         {error && <div className="denial">{error}</div>}
         {reportError && <div className="denial">{reportError}</div>}

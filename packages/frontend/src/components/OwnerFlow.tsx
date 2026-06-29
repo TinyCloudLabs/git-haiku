@@ -310,7 +310,7 @@ function TokenVerifyResult({ result }: { result: GithubTokenResult }) {
 /**
  * Inline help under the token input. Git Haiku reads ONLY commit metadata
  * (messages, repo names, timestamps — never file contents/diffs), so the
- * minimum grant is read-only. A token is optional for public repos only.
+ * minimum grant is read-only.
  */
 function TokenHelp() {
   return (
@@ -328,7 +328,7 @@ function TokenHelp() {
         <a href="https://github.com/settings/tokens/new" target="_blank" rel="noopener noreferrer">
           classic token
         </a>
-        . Public repos only? A token is optional.
+        .
       </p>
       <details className="token-help-details">
         <summary>What permissions?</summary>
