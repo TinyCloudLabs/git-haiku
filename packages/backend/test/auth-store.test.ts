@@ -94,13 +94,13 @@ describe('secret code management', () => {
     firstCode = created.secretCode;
   });
 
-  it('only stores HASHES of codes at rest, never plaintext', () => {
+  it('stores hashes for validation and plaintext for owner share URLs', () => {
     const onDisk = readFileSync(join(DATA_DIR, 'owners.json'), 'utf8');
-    expect(onDisk).not.toContain(firstCode);
-    // The persisted record exposes a hash + codeId, not the plaintext.
-    const data = JSON.parse(onDisk) as { owners: { codes: { hash: string }[] }[] };
+    expect(onDisk).toContain(firstCode);
+    const data = JSON.parse(onDisk) as { owners: { codes: { hash: string; secretCode: string }[] }[] };
     const owner = data.owners.find(() => true)!;
     expect(owner.codes[0]!.hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(owner.codes[0]!.secretCode).toBe(firstCode);
   });
 
   it('validates a code constant-time via findOwnerByCode', () => {
@@ -134,6 +134,7 @@ describe('secret code management', () => {
   it('listCodes never exposes hashes', () => {
     for (const c of store.listCodes(ownerId)) {
       expect(c).not.toHaveProperty('hash');
+      if (c.active) expect(c.secretCode).toBeTruthy();
     }
   });
 });

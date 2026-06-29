@@ -122,7 +122,6 @@ function SetupPhase({
   session: OwnerSession;
   onDone: (owner: OwnerResult) => void;
 }) {
-  const [githubLogin, setGithubLogin] = useState('');
   const [githubToken, setGithubToken] = useState('');
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -144,8 +143,6 @@ function SetupPhase({
     try {
       const result = await verifyGithubToken(githubToken);
       setVerifyResult(result);
-      // Default the login to the verified account if the field is empty.
-      if (result.ok && !githubLogin.trim()) setGithubLogin(result.login);
     } finally {
       setVerifying(false);
     }
@@ -163,6 +160,16 @@ function SetupPhase({
     setBusy(true);
     setError(null);
     try {
+      // 0. Resolve the GitHub account from the token itself. There is no owner
+      // login field: the token creator is the commit source.
+      setStatus('Verifying your GitHub token…');
+      const tokenResult = verifyResult?.ok ? verifyResult : await verifyGithubToken(githubToken);
+      setVerifyResult(tokenResult);
+      if (!tokenResult.ok) {
+        setError(tokenResult.message);
+        return;
+      }
+
       // 0. Heavy web-sdk recap (DEFERRED to here): compose the app + backend
       //    manifests and run the full `signIn()` with the OpenKey provider. This
       //    is the new owner's ONE extra signature beyond login — it authorizes
@@ -176,7 +183,7 @@ function SetupPhase({
 
       // 2. Register the owner record (binds the address; mints the first code).
       setStatus('Registering you with the backend…');
-      const ownerResult = await registerOwner(session.auth, { githubLogin: githubLogin.trim() });
+      const ownerResult = await registerOwner(session.auth, { githubLogin: tokenResult.login });
 
       // 3. Materialize + send the KV-get+decrypt delegation to the backend DID.
       setStatus('Delegating read-only secret access to the attested backend…');
@@ -221,16 +228,6 @@ function SetupPhase({
 
       <form onSubmit={run} className="form column">
         <label className="field">
-          <span>GitHub login (whose commits the haiku describes)</span>
-          <input
-            className="input"
-            data-testid="setup-github-login"
-            value={githubLogin}
-            onChange={(e) => setGithubLogin(e.target.value)}
-            placeholder="octocat"
-          />
-        </label>
-        <label className="field">
           <span>GitHub token (stored in YOUR vault, never sent to us in the clear)</span>
           <input
             className="input mono"
@@ -257,7 +254,7 @@ function SetupPhase({
         <button
           className="primary"
           data-testid="setup-authorize"
-          disabled={busy || !githubLogin.trim() || !githubToken.trim() || tokenKnownInvalid}
+          disabled={busy || !githubToken.trim() || tokenKnownInvalid}
         >
           {busy ? 'Working…' : 'Authorize & generate code'}
         </button>

@@ -12,10 +12,11 @@ import userEvent from '@testing-library/user-event';
 const {
   putGithubToken,
   materializeBackendDelegation,
-  hasGithubToken,
+  setupOwnerRecap,
   verifyGithubToken,
   previewHaiku,
   signInOwner,
+  getOwner,
   registerOwner,
   sendDelegation,
   listCodes,
@@ -26,7 +27,11 @@ const {
 } = vi.hoisted(() => ({
   putGithubToken: vi.fn(async () => {}),
   materializeBackendDelegation: vi.fn(async () => 'SERIALIZED_DELEGATION'),
-  hasGithubToken: vi.fn(async () => false),
+  setupOwnerRecap: vi.fn(async () => ({
+    tcw: {},
+    backendDid: 'did:pkh:eip155:1:0xBACKEND',
+    composedRequest: { delegationTargets: [{ did: 'did:pkh:eip155:1:0xBACKEND' }] },
+  })),
   verifyGithubToken: vi.fn(async () => ({
     ok: true as const,
     login: 'octocat',
@@ -46,6 +51,7 @@ const {
     composedRequest: { delegationTargets: [{ did: 'did:pkh:eip155:1:0xBACKEND' }] },
     auth: { address: '0xabc', token: 'jwt-token' },
   })),
+  getOwner: vi.fn(async () => null),
   registerOwner: vi.fn(async () => ({
     ownerId: 'own_1',
     secretCode: 'aaaa-bbbb-cccc-dddd',
@@ -55,7 +61,13 @@ const {
   })),
   sendDelegation: vi.fn(async () => ({ status: 'active', expiresAt: '2026-09-16T00:00:00Z' })),
   listCodes: vi.fn(async () => [
-    { codeId: 'cid1', createdAt: '2026-06-18T00:00:00Z', revokedAt: null, active: true },
+    {
+      codeId: 'cid1',
+      createdAt: '2026-06-18T00:00:00Z',
+      revokedAt: null,
+      active: true,
+      secretCode: 'aaaa-bbbb-cccc-dddd',
+    },
   ]),
   getAudit: vi.fn(async () => [
     { codeId: 'cid1', ownerId: 'own_1', ts: '2026-06-18T01:00:00Z', decision: 'allow', reason: 'ok', policyId: 'secret-code-v1' },
@@ -69,10 +81,11 @@ vi.mock('../src/lib/ownerSession', () => ({ signInOwner }));
 vi.mock('../src/lib/tinycloud', () => ({
   putGithubToken,
   materializeBackendDelegation,
-  hasGithubToken,
+  setupOwnerRecap,
 }));
 vi.mock('../src/lib/githubVerify', () => ({ verifyGithubToken }));
 vi.mock('../src/api', () => ({
+  getOwner,
   registerOwner,
   sendDelegation,
   previewHaiku,
@@ -110,10 +123,10 @@ describe('OwnerFlow', () => {
     expect(tokenLink!.getAttribute('rel')).toBe('noopener noreferrer');
     expect(screen.getByText(/what permissions\?/i)).toBeTruthy();
 
-    await user.type(screen.getByPlaceholderText('octocat'), 'octocat');
     await user.type(screen.getByPlaceholderText('ghp_…'), 'ghp_secret_token');
     await user.click(screen.getByRole('button', { name: /authorize & generate code/i }));
 
+    expect(verifyGithubToken).toHaveBeenCalledWith('ghp_secret_token');
     await waitFor(() => expect(putGithubToken).toHaveBeenCalledWith(expect.anything(), 'ghp_secret_token'));
     expect(registerOwner).toHaveBeenCalledWith(expect.anything(), { githubLogin: 'octocat' });
     expect(materializeBackendDelegation).toHaveBeenCalledWith(
@@ -160,7 +173,6 @@ describe('OwnerFlow', () => {
     await user.click(screen.getByRole('button', { name: /sign in with openkey/i }));
     await screen.findByText(/what you're authorizing/i);
 
-    await user.type(screen.getByPlaceholderText('octocat'), 'octocat');
     await user.type(screen.getByPlaceholderText('ghp_…'), 'bad_token');
     await user.click(screen.getByRole('button', { name: /verify token/i }));
 
@@ -174,13 +186,40 @@ describe('OwnerFlow', () => {
   });
 
   it('shows a stored-token indicator for a returning owner', async () => {
-    hasGithubToken.mockResolvedValueOnce(true);
+    getOwner.mockResolvedValueOnce({
+      ownerId: 'own_1',
+      secretCode: '',
+      codeId: '',
+      githubLogin: 'octocat',
+      hasGithubToken: true,
+    } as never);
     const user = userEvent.setup();
     render(<OwnerFlow />);
     await user.click(screen.getByRole('button', { name: /sign in with openkey/i }));
 
-    await screen.findByText(/a github token is already stored in your vault/i);
-    expect(hasGithubToken).toHaveBeenCalled();
+    await screen.findByText(/token stored/i);
+    expect(getOwner).toHaveBeenCalled();
+  });
+
+  it('copies share URLs from the existing codes table', async () => {
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText');
+    getOwner.mockResolvedValueOnce({
+      ownerId: 'own_1',
+      secretCode: '',
+      codeId: '',
+      githubLogin: 'octocat',
+      hasGithubToken: true,
+    } as never);
+
+    const user = userEvent.setup();
+    render(<OwnerFlow />);
+    await user.click(screen.getByRole('button', { name: /sign in with openkey/i }));
+
+    const copy = await screen.findByTestId('copy-share-url-cid1');
+    await user.click(copy);
+
+    expect(writeText).toHaveBeenCalledWith('http://localhost:3000/u/own_1?code=aaaa-bbbb-cccc-dddd');
+    await screen.findByRole('button', { name: /copied/i });
   });
 
   it('previews the haiku end-to-end from the dashboard', async () => {
@@ -189,7 +228,6 @@ describe('OwnerFlow', () => {
     await user.click(screen.getByRole('button', { name: /sign in with openkey/i }));
     await screen.findByText(/what you're authorizing/i);
 
-    await user.type(screen.getByPlaceholderText('octocat'), 'octocat');
     await user.type(screen.getByPlaceholderText('ghp_…'), 'ghp_secret_token');
     await user.click(screen.getByRole('button', { name: /authorize & generate code/i }));
 
@@ -213,7 +251,6 @@ describe('OwnerFlow', () => {
     await user.click(screen.getByRole('button', { name: /sign in with openkey/i }));
     await screen.findByText(/what you're authorizing/i);
 
-    await user.type(screen.getByPlaceholderText('octocat'), 'octocat');
     await user.type(screen.getByPlaceholderText('ghp_…'), 'ghp_secret_token');
     await user.click(screen.getByRole('button', { name: /authorize & generate code/i }));
 

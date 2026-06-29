@@ -41,7 +41,7 @@ const ETHERS_UMD_PATH = fileURLToPath(
 const TEST_WALLET_NAME = "TinyCloud Test Wallet";
 
 // ── Test inputs from the gitignored .githaiku-dev/e2e.env (NEVER printed) ──────
-function loadE2eEnv(): { githubLogin: string; githubToken: string } {
+function loadE2eEnv(): { githubToken: string } {
   const envPath = fileURLToPath(new URL("../../../../.githaiku-dev/e2e.env", import.meta.url));
   let raw: string;
   try {
@@ -49,7 +49,7 @@ function loadE2eEnv(): { githubLogin: string; githubToken: string } {
   } catch (err) {
     throw new Error(
       `Missing .githaiku-dev/e2e.env (expected at ${envPath}). It must define ` +
-        `GITHAIKU_E2E_GITHUB_LOGIN and GITHAIKU_E2E_GITHUB_TOKEN.`,
+        `GITHAIKU_E2E_GITHUB_TOKEN.`,
     );
   }
   const vars: Record<string, string> = {};
@@ -60,11 +60,9 @@ function loadE2eEnv(): { githubLogin: string; githubToken: string } {
     if (eq === -1) continue;
     vars[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim();
   }
-  const githubLogin = process.env.GITHAIKU_E2E_GITHUB_LOGIN ?? vars.GITHAIKU_E2E_GITHUB_LOGIN ?? "";
   const githubToken = process.env.GITHAIKU_E2E_GITHUB_TOKEN ?? vars.GITHAIKU_E2E_GITHUB_TOKEN ?? "";
-  if (!githubLogin) throw new Error("GITHAIKU_E2E_GITHUB_LOGIN is empty");
   if (!githubToken) throw new Error("GITHAIKU_E2E_GITHUB_TOKEN is empty");
-  return { githubLogin, githubToken };
+  return { githubToken };
 }
 
 // ── init scripts (replicated EXACTLY from secret-manager) ──────────────────────
@@ -162,11 +160,11 @@ function firstVisible(...locators: Locator[]): Locator {
   return locators.reduce((acc, l) => acc.or(l));
 }
 
-function loginInputLoc(page: Page): Locator {
-  return firstVisible(page.getByTestId("setup-github-login"), page.getByPlaceholder("octocat"));
-}
 function tokenInputLoc(page: Page): Locator {
   return firstVisible(page.getByTestId("setup-github-token"), page.getByPlaceholder("ghp_…"));
+}
+function removedLoginInputLoc(page: Page): Locator {
+  return firstVisible(page.getByTestId("setup-github-login"), page.getByPlaceholder("octocat"));
 }
 function previewButtonLoc(page: Page): Locator {
   return firstVisible(
@@ -245,17 +243,16 @@ async function signIn(page: Page): Promise<void> {
 }
 
 /**
- * Run the SETUP form: fill login + token, submit, ride the bounded
+ * Run the SETUP form: fill token, submit, ride the bounded
  * space-not-found retry loop, and converge on the dashboard. Bounded retries
  * mirror a human re-clicking Authorize when the just-created space hasn't
  * propagated to the live node yet.
  */
 async function runSetup(
   page: Page,
-  githubLogin: string,
   githubToken: string,
 ): Promise<void> {
-  await loginInputLoc(page).fill(githubLogin);
+  await expect(removedLoginInputLoc(page)).toHaveCount(0);
   await tokenInputLoc(page).fill(githubToken);
   const authorize = authorizeButtonLoc(page);
   const previewButton = previewButtonLoc(page);
@@ -320,7 +317,7 @@ async function previewHaiku(page: Page): Promise<string[]> {
 // ── Scenario 1: FRESH owner → full setup path ──────────────────────────────────
 
 test("fresh owner signs in, sets up, and produces a haiku", async ({ page }) => {
-  const { githubLogin, githubToken } = loadE2eEnv();
+  const { githubToken } = loadE2eEnv();
   const owner = Wallet.createRandom();
   const addressSuffix = owner.address.slice(-8);
 
@@ -333,11 +330,12 @@ test("fresh owner signs in, sets up, and produces a haiku", async ({ page }) => 
   await signIn(page);
 
   // ── PART 2: a fresh owner has no record → SETUP form ────────────────────────
-  await expect(loginInputLoc(page)).toBeVisible({ timeout: 120000 });
+  await expect(tokenInputLoc(page)).toBeVisible({ timeout: 120000 });
+  await expect(removedLoginInputLoc(page)).toHaveCount(0);
   console.log("[flow] fresh owner → setup form");
 
   // ── PART 3: authorize (recap sig) → secrets.put + register + delegate ───────
-  await runSetup(page, githubLogin, githubToken);
+  await runSetup(page, githubToken);
 
   // Dashboard arrival.
   await expect(previewButtonLoc(page)).toBeVisible({ timeout: 180000 });
@@ -364,7 +362,7 @@ test("fresh owner signs in, sets up, and produces a haiku", async ({ page }) => 
 test("returning owner just signs in and lands on the dashboard (no setup, no token re-upload)", async ({
   page,
 }) => {
-  const { githubLogin, githubToken } = loadE2eEnv();
+  const { githubToken } = loadE2eEnv();
   const owner = new Wallet(process.env.GITHAIKU_E2E_PRIVATE_KEY ?? ANVIL_KEY_0);
   const addressSuffix = owner.address.slice(-8);
 
@@ -379,12 +377,12 @@ test("returning owner just signs in and lands on the dashboard (no setup, no tok
   // ── PART 2: self-bootstrap — if this fixed key has never been set up, the
   // app routes to the SETUP form; run setup ONCE so a prior-run record exists.
   // Then RELOAD and re-sign-in to assert the RETURNING path from a clean slate.
-  await expect(loginInputLoc(page).or(previewButtonLoc(page)).first()).toBeVisible({
+  await expect(tokenInputLoc(page).or(previewButtonLoc(page)).first()).toBeVisible({
     timeout: 120000,
   });
-  if (await loginInputLoc(page).isVisible()) {
+  if (await tokenInputLoc(page).isVisible()) {
     console.log("[flow] returning key not yet set up → running setup once to seed it");
-    await runSetup(page, githubLogin, githubToken);
+    await runSetup(page, githubToken);
     await expect(previewButtonLoc(page)).toBeVisible({ timeout: 180000 });
 
     // Fresh page + fresh wallet-request log: now assert the lightweight login.
@@ -398,7 +396,7 @@ test("returning owner just signs in and lands on the dashboard (no setup, no tok
   // The dashboard's Preview button is present; the setup token field is NOT.
   await expect(previewButtonLoc(page)).toBeVisible({ timeout: 120000 });
   await expect(tokenInputLoc(page)).toHaveCount(0);
-  await expect(loginInputLoc(page)).toHaveCount(0);
+  await expect(removedLoginInputLoc(page)).toHaveCount(0);
 
   const addressDisplay = firstVisible(
     page.getByTestId("owner-address"),
@@ -443,7 +441,7 @@ test("returning owner just signs in and lands on the dashboard (no setup, no tok
       page.getByRole("button", { name: /rotate \/ re-store github token/i }),
     );
     await restore.click();
-    await runSetup(page, githubLogin, githubToken);
+    await runSetup(page, githubToken);
     await expect(previewButtonLoc(page)).toBeVisible({ timeout: 180000 });
     outcome = { ok: false, reason: "" }; // fall through to the asserting preview
   }
