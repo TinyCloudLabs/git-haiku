@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import {
+  generateLastWeekReport,
   getAudit,
   listCodes,
   mintCode,
@@ -11,8 +12,10 @@ import {
   type MintedCode,
   type OwnerAuthContext,
   type OwnerResult,
+  type WeeklyReport,
 } from '../api';
 import { PreviewHaiku } from './PreviewHaiku';
+import { WeeklyReportCard } from './WeeklyReportCard';
 
 /**
  * Owner dashboard: mint / list / rotate / revoke secret codes, show share URLs,
@@ -33,7 +36,10 @@ export function OwnerDashboard({
   const [codes, setCodes] = useState<CodeSummary[] | null>(null);
   const [audit, setAudit] = useState<AuditEntry[] | null>(null);
   const [justMinted, setJustMinted] = useState<MintedCode | null>(null);
-  const [copiedCodeId, setCopiedCodeId] = useState<string | null>(null);
+  const [copiedShareTarget, setCopiedShareTarget] = useState<string | null>(null);
+  const [weeklyReport, setWeeklyReport] = useState<WeeklyReport | null>(null);
+  const [reportBusy, setReportBusy] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -88,14 +94,27 @@ export function OwnerDashboard({
       await refresh();
     });
 
-  async function copyShareUrl(code: CodeSummary) {
-    if (!code.secretCode) return;
+  async function onWeeklyReport() {
+    setReportBusy(true);
+    setReportError(null);
     try {
-      await navigator.clipboard.writeText(shareUrlFor(owner.ownerId, code.secretCode));
-      setCopiedCodeId(code.codeId);
-      setTimeout(() => setCopiedCodeId(null), 1500);
+      setWeeklyReport(await generateLastWeekReport(auth));
+    } catch (err) {
+      setReportError(err instanceof Error ? err.message : 'failed to generate report');
+    } finally {
+      setReportBusy(false);
+    }
+  }
+
+  async function copyShareUrl(code: CodeSummary, kind: ShareKind) {
+    if (!code.secretCode) return;
+    const target = `${code.codeId}:${kind}`;
+    try {
+      await navigator.clipboard.writeText(shareUrlFor(owner.ownerId, code.secretCode, kind));
+      setCopiedShareTarget(target);
+      setTimeout(() => setCopiedShareTarget(null), 1500);
     } catch {
-      setCopiedCodeId(null);
+      setCopiedShareTarget(null);
     }
   }
 
@@ -134,11 +153,22 @@ export function OwnerDashboard({
           >
             Rotate / re-store GitHub token
           </button>
+          <button
+            className="ghost"
+            data-testid="weekly-report-run"
+            onClick={() => void onWeeklyReport()}
+            disabled={reportBusy}
+          >
+            {reportBusy ? 'Writing report…' : 'What did I do last week?'}
+          </button>
         </div>
         {error && <div className="denial">{error}</div>}
+        {reportError && <div className="denial">{reportError}</div>}
       </div>
 
       {justMinted && <NewCodeCard owner={owner.ownerId} minted={justMinted} />}
+
+      {weeklyReport && <WeeklyReportCard report={weeklyReport} />}
 
       <PreviewHaiku auth={auth} />
 
@@ -167,13 +197,22 @@ export function OwnerDashboard({
                   <td>{c.active ? 'active' : `revoked ${new Date(c.revokedAt!).toLocaleDateString()}`}</td>
                   <td>
                     {c.active && c.secretCode ? (
-                      <button
-                        className="ghost small"
-                        data-testid={`copy-share-url-${c.codeId}`}
-                        onClick={() => void copyShareUrl(c)}
-                      >
-                        {copiedCodeId === c.codeId ? 'Copied' : 'Copy URL'}
-                      </button>
+                      <div className="share-actions">
+                        <button
+                          className="ghost small"
+                          data-testid={`copy-share-url-${c.codeId}`}
+                          onClick={() => void copyShareUrl(c, 'haiku')}
+                        >
+                          {copiedShareTarget === `${c.codeId}:haiku` ? 'Copied' : 'Haiku'}
+                        </button>
+                        <button
+                          className="ghost small"
+                          data-testid={`copy-report-url-${c.codeId}`}
+                          onClick={() => void copyShareUrl(c, 'report')}
+                        >
+                          {copiedShareTarget === `${c.codeId}:report` ? 'Copied' : 'Report'}
+                        </button>
+                      </div>
                     ) : c.active ? (
                       <span className="muted">Unavailable</span>
                     ) : (
@@ -228,10 +267,11 @@ export function OwnerDashboard({
 }
 
 function NewCodeCard({ owner, minted }: { owner: string; minted: MintedCode }) {
-  const shareUrl = shareUrlFor(owner, minted.secretCode);
-  const [copied, setCopied] = useState<'code' | 'url' | null>(null);
+  const haikuUrl = shareUrlFor(owner, minted.secretCode, 'haiku');
+  const reportUrl = shareUrlFor(owner, minted.secretCode, 'report');
+  const [copied, setCopied] = useState<'code' | 'haiku-url' | 'report-url' | null>(null);
 
-  async function copy(text: string, what: 'code' | 'url') {
+  async function copy(text: string, what: 'code' | 'haiku-url' | 'report-url') {
     try {
       await navigator.clipboard.writeText(text);
       setCopied(what);
@@ -252,11 +292,20 @@ function NewCodeCard({ owner, minted }: { owner: string; minted: MintedCode }) {
         </button>
       </div>
       <label className="field">
-        <span>Share URL</span>
+        <span>Haiku URL</span>
         <div className="codepill-row">
-          <input className="input mono" readOnly value={shareUrl} />
-          <button className="ghost small" onClick={() => copy(shareUrl, 'url')}>
-            {copied === 'url' ? 'Copied' : 'Copy URL'}
+          <input className="input mono" readOnly value={haikuUrl} />
+          <button className="ghost small" onClick={() => copy(haikuUrl, 'haiku-url')}>
+            {copied === 'haiku-url' ? 'Copied' : 'Copy URL'}
+          </button>
+        </div>
+      </label>
+      <label className="field">
+        <span>Weekly report URL</span>
+        <div className="codepill-row">
+          <input className="input mono" readOnly value={reportUrl} />
+          <button className="ghost small" onClick={() => copy(reportUrl, 'report-url')}>
+            {copied === 'report-url' ? 'Copied' : 'Copy URL'}
           </button>
         </div>
       </label>
@@ -264,9 +313,12 @@ function NewCodeCard({ owner, minted }: { owner: string; minted: MintedCode }) {
   );
 }
 
-function shareUrlFor(ownerId: string, secretCode: string): string {
+type ShareKind = 'haiku' | 'report';
+
+function shareUrlFor(ownerId: string, secretCode: string, kind: ShareKind): string {
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
-  return `${origin}/u/${ownerId}?code=${encodeURIComponent(secretCode)}`;
+  const kindParam = kind === 'report' ? '&kind=report' : '';
+  return `${origin}/u/${ownerId}?code=${encodeURIComponent(secretCode)}${kindParam}`;
 }
 
 function shortDid(did: string): string {

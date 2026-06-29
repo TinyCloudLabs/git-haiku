@@ -15,6 +15,7 @@ const {
   setupOwnerRecap,
   verifyGithubToken,
   previewHaiku,
+  generateLastWeekReport,
   signInOwner,
   getOwner,
   registerOwner,
@@ -43,6 +44,24 @@ const {
     haiku: { lines: ['autumn commit lands', 'tests turn green beneath the moon', 'merge into the main'] },
     author: { githubLogin: 'octocat' },
     proof: { policy_id: 'p', image_digest: null, attestation_url: null },
+  })),
+  generateLastWeekReport: vi.fn(async () => ({
+    githubLogin: 'octocat',
+    generatedAt: '2026-06-29T14:00:00Z',
+    range: { start: '2026-06-22', end: '2026-06-28' },
+    commitCount: 1,
+    generatedBy: 'deterministic' as const,
+    overview: 'Shipped a focused weekly report flow.',
+    days: [
+      {
+        date: '2026-06-22',
+        weekday: 'Monday',
+        commitCount: 1,
+        repos: ['octocat/hello'],
+        summary: 'Worked on octocat/hello with one commit.',
+        highlights: ['hello: feat: add report'],
+      },
+    ],
   })),
   signInOwner: vi.fn(async () => ({
     openkey: { address: '0xabc', keyId: 'k', did: 'did:pkh:eip155:1:0xabc', openkey: {}, web3Provider: {} },
@@ -90,6 +109,7 @@ vi.mock('../src/api', () => ({
   registerOwner,
   sendDelegation,
   previewHaiku,
+  generateLastWeekReport,
   listCodes,
   getAudit,
   mintCode,
@@ -202,7 +222,7 @@ describe('OwnerFlow', () => {
     expect(getOwner).toHaveBeenCalled();
   });
 
-  it('copies share URLs from the existing codes table', async () => {
+  it('copies haiku and report share URLs from the existing codes table', async () => {
     const writeText = vi.spyOn(navigator.clipboard, 'writeText');
     getOwner.mockResolvedValueOnce({
       ownerId: 'own_1',
@@ -221,6 +241,13 @@ describe('OwnerFlow', () => {
 
     expect(writeText).toHaveBeenCalledWith('http://localhost:3000/u/own_1?code=aaaa-bbbb-cccc-dddd');
     await screen.findByRole('button', { name: /copied/i });
+
+    const copyReport = await screen.findByTestId('copy-report-url-cid1');
+    await user.click(copyReport);
+
+    expect(writeText).toHaveBeenCalledWith(
+      'http://localhost:3000/u/own_1?code=aaaa-bbbb-cccc-dddd&kind=report',
+    );
   });
 
   it('previews the haiku end-to-end from the dashboard', async () => {
@@ -238,6 +265,29 @@ describe('OwnerFlow', () => {
     expect(previewHaiku).toHaveBeenCalledOnce();
     await screen.findByText(/autumn commit lands/i);
     expect(screen.getByText(/merge into the main/i)).toBeTruthy();
+  });
+
+  it('generates a last-week report from the dashboard', async () => {
+    getOwner.mockResolvedValueOnce({
+      ownerId: 'own_1',
+      secretCode: '',
+      codeId: '',
+      githubLogin: 'octocat',
+      hasGithubToken: true,
+    } as never);
+
+    const user = userEvent.setup();
+    render(<OwnerFlow />);
+    await user.click(screen.getByRole('button', { name: /sign in with openkey/i }));
+
+    await screen.findByText(/owner dashboard/i);
+    await user.click(screen.getByRole('button', { name: /what did i do last week/i }));
+
+    expect(generateLastWeekReport).toHaveBeenCalledWith(expect.objectContaining({ token: 'jwt-token' }));
+    await screen.findByText(/last week report/i);
+    expect(screen.getByText(/shipped a focused weekly report flow/i)).toBeTruthy();
+    expect(screen.getByText(/Monday · 2026-06-22/)).toBeTruthy();
+    expect(screen.getByText(/hello: feat: add report/i)).toBeTruthy();
   });
 
   it('shows a stage-keyed message when preview fails', async () => {

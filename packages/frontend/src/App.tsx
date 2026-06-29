@@ -6,19 +6,22 @@ import { Requester } from './components/Requester';
 import { HowSafe } from './components/HowSafe';
 
 type View = 'landing' | 'requester' | 'owner' | 'safe';
+type RequestKind = 'haiku' | 'report';
 
 /**
  * Top-level view router (no router dep). The share-URL shape `/u/<owner>?code=…`
  * deep-links straight into the requester with the code prefilled.
  */
-function initialView(): { view: View; code: string } {
-  if (typeof window === 'undefined') return { view: 'landing', code: '' };
+function initialView(): { view: View; code: string; kind: RequestKind } {
+  if (typeof window === 'undefined') return { view: 'landing', code: '', kind: 'haiku' };
   const path = window.location.pathname;
-  const code = new URLSearchParams(window.location.search).get('code') ?? '';
-  if (path.startsWith('/u/') || code) return { view: 'requester', code };
-  if (path.startsWith('/owner')) return { view: 'owner', code: '' };
-  if (path.startsWith('/safe')) return { view: 'safe', code: '' };
-  return { view: 'landing', code: '' };
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get('code') ?? '';
+  const kind = params.get('kind') === 'report' ? 'report' : 'haiku';
+  if (path.startsWith('/u/') || code) return { view: 'requester', code, kind };
+  if (path.startsWith('/owner')) return { view: 'owner', code: '', kind: 'haiku' };
+  if (path.startsWith('/safe')) return { view: 'safe', code: '', kind: 'haiku' };
+  return { view: 'landing', code: '', kind: 'haiku' };
 }
 
 export function App() {
@@ -31,7 +34,7 @@ export function App() {
 
   const body =
     view === 'requester' ? (
-      <Requester initialCode={start.code} />
+      <Requester initialCode={start.code} initialKind={start.kind} />
     ) : view === 'owner' ? (
       <OwnerFlow />
     ) : (

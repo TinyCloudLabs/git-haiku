@@ -25,6 +25,7 @@ import {
   consumeOwnerPreviewAttempt,
   type HaikuRateLimitResult,
 } from './rate-limit';
+import { generateLastWeekReportForOwner } from './report';
 import { makeSecretsProvider } from './secrets';
 import {
   createCode,
@@ -48,7 +49,7 @@ import {
  * from the single web-sdk SIWE sign-in signature (see auth.ts). Authed requests
  * carry `Authorization: Bearer <jwt>`.
  * Public: /health, /attestation, /api/server-info, /api/auth/nonce,
- * /api/auth/verify, /api/haiku.
+ * /api/auth/verify, /api/haiku, /api/reports/last-week/share.
  */
 export async function buildServer(): Promise<FastifyInstance> {
   await verifyTeeStartup();
@@ -304,6 +305,58 @@ export async function buildServer(): Promise<FastifyInstance> {
     return { entries: await readAudit(ctx.owner.ownerId) };
   });
 
+  // --- Owner report: previous complete UTC week (OWNER-AUTHENTICATED) ------
+  app.post('/api/reports/last-week', async (request, reply) => {
+    const ctx = await authenticateOwner(request, reply);
+    if (!ctx) return;
+    try {
+      return await generateLastWeekReportForOwner(ctx.owner, secrets);
+    } catch (err) {
+      request.log.error({ err, ownerId: ctx.owner.ownerId }, 'weekly report failed');
+      reply.code(502);
+      return { error: 'report_failed', message: 'could not generate last week report' };
+    }
+  });
+
+  // --- Public report: code -> previous complete UTC week -------------------
+  app.post('/api/reports/last-week/share', async (request, reply) => {
+    reply.header('content-type', 'application/json');
+
+    const body = (request.body ?? {}) as { code?: unknown };
+    const code = typeof body.code === 'string' ? body.code.trim() : '';
+
+    const backoff = checkHaikuRequestBackoff(request);
+    if (!backoff.allowed) {
+      return sendReportRateLimited(reply, backoff);
+    }
+
+    const owner = code ? findOwnerByCode(code) : null;
+    if (!owner) {
+      const invalidLimit = consumeInvalidHaikuAttempt(request, code);
+      if (!invalidLimit.allowed) {
+        return sendReportRateLimited(reply, invalidLimit);
+      }
+      await recordInvalidCodeAudit({ ip: request.ip });
+      return { allowed: false, reason: 'invalid code' };
+    }
+
+    const matchedLimit = consumeMatchedOwnerHaikuAttempt(request, owner.ownerId);
+    if (!matchedLimit.allowed) {
+      return sendReportRateLimited(reply, matchedLimit);
+    }
+
+    try {
+      const report = await generateLastWeekReportForOwner(owner, secrets);
+      await recordAudit({ code, ownerId: owner.ownerId, decision: 'allow', reason: 'report_ok' });
+      return { allowed: true, report };
+    } catch (err) {
+      request.log.error({ err, ownerId: owner.ownerId }, 'shared weekly report failed');
+      await recordAudit({ code, ownerId: owner.ownerId, decision: 'deny', reason: 'report_error' });
+      reply.code(502);
+      return { allowed: false, reason: 'could not generate last week report' };
+    }
+  });
+
   // --- Requester: code -> haiku (THE egress choke point) -------------------
   app.post(
     '/api/haiku',
@@ -418,6 +471,16 @@ function sendRateLimited(reply: FastifyReply, result: Exclude<HaikuRateLimitResu
   reply.header('retry-after', String(retryAfterSeconds));
   const denial: EgressPayload = { allowed: false, reason: 'rate limited' };
   return reply.send(serializeGuardedResponse(denial));
+}
+
+function sendReportRateLimited(
+  reply: FastifyReply,
+  result: Exclude<HaikuRateLimitResult, { allowed: true }>,
+): FastifyReply {
+  const retryAfterSeconds = Math.max(1, Math.ceil(result.retryAfterMs / 1_000));
+  reply.code(429);
+  reply.header('retry-after', String(retryAfterSeconds));
+  return reply.send({ allowed: false, reason: 'rate limited' });
 }
 
 function redactedStatusCode(error: unknown): number {

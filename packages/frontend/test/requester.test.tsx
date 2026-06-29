@@ -2,8 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-const { requestHaiku } = vi.hoisted(() => ({ requestHaiku: vi.fn() }));
-vi.mock('../src/api', () => ({ requestHaiku }));
+const { requestHaiku, requestWeeklyReport } = vi.hoisted(() => ({
+  requestHaiku: vi.fn(),
+  requestWeeklyReport: vi.fn(),
+}));
+vi.mock('../src/api', () => ({ requestHaiku, requestWeeklyReport }));
 
 import { Requester } from '../src/components/Requester';
 
@@ -50,5 +53,39 @@ describe('Requester', () => {
     await waitFor(() => {
       expect(screen.queryByText(/use it from an agent/i)).toBeNull();
     });
+  });
+
+  it('renders a weekly report with the same code', async () => {
+    requestWeeklyReport.mockResolvedValue({
+      allowed: true,
+      report: {
+        githubLogin: 'skgbafa',
+        generatedAt: '2026-06-29T14:00:00Z',
+        range: { start: '2026-06-22', end: '2026-06-28' },
+        commitCount: 1,
+        generatedBy: 'deterministic',
+        overview: 'Shipped report sharing.',
+        days: [
+          {
+            date: '2026-06-22',
+            weekday: 'Monday',
+            commitCount: 1,
+            repos: ['TinyCloudLabs/git-haiku'],
+            summary: 'Worked on TinyCloudLabs/git-haiku with one commit.',
+            highlights: ['git-haiku: feat: share report'],
+          },
+        ],
+      },
+    });
+    const user = userEvent.setup();
+    render(<Requester initialKind="report" initialCode="aaaa-bbbb-cccc-dddd" />);
+
+    await user.click(screen.getByRole('button', { name: /get report/i }));
+
+    expect(requestWeeklyReport).toHaveBeenCalledWith('aaaa-bbbb-cccc-dddd');
+    await screen.findByText(/last week report/i);
+    expect(screen.getByText(/shipped report sharing/i)).toBeTruthy();
+    expect(screen.getByText(/git-haiku: feat: share report/i)).toBeTruthy();
+    expect(screen.queryByText(/use it from an agent/i)).toBeNull();
   });
 });
