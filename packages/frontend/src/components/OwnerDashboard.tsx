@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import {
+  generateLastWeekReport,
   getAudit,
   listCodes,
   mintCode,
@@ -11,6 +12,7 @@ import {
   type MintedCode,
   type OwnerAuthContext,
   type OwnerResult,
+  type WeeklyReport,
 } from '../api';
 import { PreviewHaiku } from './PreviewHaiku';
 
@@ -34,6 +36,9 @@ export function OwnerDashboard({
   const [audit, setAudit] = useState<AuditEntry[] | null>(null);
   const [justMinted, setJustMinted] = useState<MintedCode | null>(null);
   const [copiedCodeId, setCopiedCodeId] = useState<string | null>(null);
+  const [weeklyReport, setWeeklyReport] = useState<WeeklyReport | null>(null);
+  const [reportBusy, setReportBusy] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -88,6 +93,18 @@ export function OwnerDashboard({
       await refresh();
     });
 
+  async function onWeeklyReport() {
+    setReportBusy(true);
+    setReportError(null);
+    try {
+      setWeeklyReport(await generateLastWeekReport(auth));
+    } catch (err) {
+      setReportError(err instanceof Error ? err.message : 'failed to generate report');
+    } finally {
+      setReportBusy(false);
+    }
+  }
+
   async function copyShareUrl(code: CodeSummary) {
     if (!code.secretCode) return;
     try {
@@ -134,11 +151,22 @@ export function OwnerDashboard({
           >
             Rotate / re-store GitHub token
           </button>
+          <button
+            className="ghost"
+            data-testid="weekly-report-run"
+            onClick={() => void onWeeklyReport()}
+            disabled={reportBusy}
+          >
+            {reportBusy ? 'Writing report…' : 'What did I do last week?'}
+          </button>
         </div>
         {error && <div className="denial">{error}</div>}
+        {reportError && <div className="denial">{reportError}</div>}
       </div>
 
       {justMinted && <NewCodeCard owner={owner.ownerId} minted={justMinted} />}
+
+      {weeklyReport && <WeeklyReportCard report={weeklyReport} />}
 
       <PreviewHaiku auth={auth} />
 
@@ -224,6 +252,52 @@ export function OwnerDashboard({
         )}
       </div>
     </section>
+  );
+}
+
+function WeeklyReportCard({ report }: { report: WeeklyReport }) {
+  return (
+    <div className="card report-card">
+      <div className="report-head">
+        <div>
+          <h3>Last week report</h3>
+          <p className="muted">
+            @{report.githubLogin} · {report.range.start} to {report.range.end} · {report.commitCount}{' '}
+            commits
+          </p>
+        </div>
+        <span className="report-agent">{report.generatedBy === 'redpill-agent' ? 'agent' : 'summary'}</span>
+      </div>
+
+      <section className="report-section">
+        <h4>Overview</h4>
+        <p>{report.overview}</p>
+      </section>
+
+      <section className="report-section">
+        <h4>Day by day</h4>
+        <div className="report-days">
+          {report.days.map((day) => (
+            <article key={day.date} className="report-day">
+              <div className="report-day-head">
+                <strong>
+                  {day.weekday} · {day.date}
+                </strong>
+                <span className="muted">{day.commitCount} commits</span>
+              </div>
+              <p>{day.summary}</p>
+              {day.highlights.length > 0 && (
+                <ul>
+                  {day.highlights.map((highlight, i) => (
+                    <li key={`${day.date}-${i}`}>{highlight}</li>
+                  ))}
+                </ul>
+              )}
+            </article>
+          ))}
+        </div>
+      </section>
+    </div>
   );
 }
 

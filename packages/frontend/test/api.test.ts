@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  generateLastWeekReport,
   mintCode,
   previewHaiku,
   registerOwner,
@@ -92,6 +93,34 @@ describe('bearer-token authed calls', () => {
       const headers = call[1]?.headers as Record<string, string>;
       expect(headers.authorization).toBe(`Bearer ${auth.token}`);
     }
+  });
+
+  it('generateLastWeekReport POSTs with the bearer token', async () => {
+    const { captured } = mockBackend({
+      githubLogin: 'octocat',
+      generatedAt: '2026-06-29T00:00:00Z',
+      range: { start: '2026-06-22', end: '2026-06-28' },
+      commitCount: 1,
+      generatedBy: 'deterministic',
+      overview: 'Shipped one focused change.',
+      days: [
+        {
+          date: '2026-06-22',
+          weekday: 'Monday',
+          commitCount: 1,
+          repos: ['octocat/hello'],
+          summary: 'Worked on octocat/hello.',
+          highlights: ['hello: feat: add report'],
+        },
+      ],
+    });
+
+    const report = await generateLastWeekReport(auth);
+
+    expect(captured.method).toBe('POST');
+    expect(captured.url).toContain('/api/reports/last-week');
+    expect(captured.headers!.authorization).toBe(`Bearer ${auth.token}`);
+    expect(report.overview).toMatch(/focused/);
   });
 });
 

@@ -40,6 +40,12 @@ function withinWindow(timestamp: string, windowDays: number): boolean {
   return t >= cutoff;
 }
 
+function withinRange(timestamp: string, since: Date, until: Date): boolean {
+  const t = new Date(timestamp).getTime();
+  if (Number.isNaN(t)) return false;
+  return t >= since.getTime() && t < until.getTime();
+}
+
 interface GithubSearchCommitItem {
   repository?: { full_name?: string };
   commit?: { message?: string; author?: { date?: string } };
@@ -101,6 +107,59 @@ export async function fetchRecentCommits(params: {
     if (!date || !message) continue;
     if (!withinWindow(date, windowDays)) continue;
     // Strictly message + repo + timestamp. Nothing else.
+    commits.push({
+      repo: item.repository?.full_name ?? 'unknown',
+      message: message.split('\n')[0]!.slice(0, 200),
+      timestamp: date,
+    });
+    if (commits.length >= maxCommits) break;
+  }
+
+  return { commits, usedFixture: false };
+}
+
+export async function fetchCommitsInRange(params: {
+  githubLogin: string;
+  githubToken: string | null;
+  since: Date;
+  until: Date;
+  maxCommits?: number;
+}): Promise<FetchResult> {
+  const { githubLogin, githubToken, since, until } = params;
+  const maxCommits = Math.min(params.maxCommits ?? 100, 100);
+
+  if (!githubToken) {
+    return {
+      commits: DEV_FIXTURE.filter((c) => withinRange(c.timestamp, since, until)).slice(0, maxCommits),
+      usedFixture: true,
+    };
+  }
+
+  const query = encodeURIComponent(`author:${githubLogin}`);
+  const res = await fetch(
+    `https://api.github.com/search/commits?q=${query}&sort=author-date&order=desc&per_page=100`,
+    {
+      headers: {
+        Authorization: `Bearer ${githubToken}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+        'User-Agent': 'githaiku',
+      },
+    },
+  );
+
+  if (!res.ok) {
+    throw new Error(`GitHub commit search failed: ${res.status}`);
+  }
+
+  const body = (await res.json()) as GithubSearchResponse;
+  const commits: CommitMeta[] = [];
+
+  for (const item of body.items ?? []) {
+    const date = item.commit?.author?.date;
+    const message = item.commit?.message;
+    if (!date || !message) continue;
+    if (!withinRange(date, since, until)) continue;
     commits.push({
       repo: item.repository?.full_name ?? 'unknown',
       message: message.split('\n')[0]!.slice(0, 200),

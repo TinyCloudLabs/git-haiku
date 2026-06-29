@@ -186,6 +186,55 @@ describe('owner auth on POST /api/owner', () => {
   });
 });
 
+describe('POST /api/reports/last-week', () => {
+  it('requires owner auth', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/reports/last-week' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('returns a last-week activity report without echoing the GitHub token', async () => {
+    // Pick a timestamp inside the endpoint's previous complete UTC week window.
+    const day = new Date();
+    day.setUTCHours(0, 0, 0, 0);
+    const currentWeekStart = new Date(day.getTime() - ((day.getUTCDay() + 6) % 7) * 24 * 60 * 60 * 1000);
+    const previousWeekStart = new Date(currentWeekStart.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const commitDate = new Date(previousWeekStart.getTime() + 2 * 24 * 60 * 60 * 1000 + 12 * 60 * 60 * 1000).toISOString();
+    const commitFixture = JSON.stringify({
+      items: [
+        {
+          repository: { full_name: 'octocat/hello' },
+          commit: { message: 'feat: add weekly report\n\nbody should be ignored', author: { date: commitDate } },
+        },
+      ],
+    });
+
+    const headers = await authHeaders(1);
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/owner',
+      headers,
+      payload: { githubLogin: 'octocat', githubToken: 'ghp_report_success' },
+    });
+    expect(created.statusCode).toBe(201);
+
+    const realFetch = global.fetch;
+    global.fetch = (async () => new Response(commitFixture, { status: 200 })) as typeof fetch;
+    try {
+      const res = await app.inject({ method: 'POST', url: '/api/reports/last-week', headers });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.githubLogin).toBe('octocat');
+      expect(body.days).toHaveLength(7);
+      expect(body.commitCount).toBe(1);
+      expect(body.overview).toContain('1 commit');
+      expect(JSON.stringify(body.days)).toContain('hello: feat: add weekly report');
+      expect(res.body).not.toContain('ghp_report_success');
+    } finally {
+      global.fetch = realFetch;
+    }
+  });
+});
+
 describe('code management (create / revoke / rotate)', () => {
   it('lists, creates, rotates and revokes codes — gated by owner auth', async () => {
     // Wallet 4 = this owner.

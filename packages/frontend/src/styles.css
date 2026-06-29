@@ -369,6 +369,48 @@ body {
   flex-wrap: wrap;
 }
 
+/* ── owner weekly report ─────────────────────────────────────────── */
+.report-card h3,
+.report-card h4 {
+  margin-top: 0;
+}
+.report-head,
+.report-day-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.report-agent {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 9px;
+  font-size: 12px;
+  color: var(--moss-dark);
+  font-family: ui-monospace, monospace;
+}
+.report-section {
+  margin-top: 20px;
+}
+.report-days {
+  display: grid;
+  gap: 14px;
+}
+.report-day {
+  border-top: 1px solid #ece6d8;
+  padding-top: 12px;
+}
+.report-day p {
+  margin: 8px 0;
+}
+.report-day ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+.report-day li {
+  margin-bottom: 6px;
+}
+
 /* ── MCP / copy blocks ───────────────────────────────────────────── */
 .copyblock {
   margin: 16px 0;

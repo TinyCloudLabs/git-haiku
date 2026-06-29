@@ -105,6 +105,25 @@ export interface AuditEntry {
   policyId: string;
 }
 
+export interface WeeklyReportDay {
+  date: string;
+  weekday: string;
+  commitCount: number;
+  repos: string[];
+  summary: string;
+  highlights: string[];
+}
+
+export interface WeeklyReport {
+  githubLogin: string;
+  generatedAt: string;
+  range: { start: string; end: string };
+  commitCount: number;
+  generatedBy: 'redpill-agent' | 'deterministic';
+  overview: string;
+  days: WeeklyReportDay[];
+}
+
 // ── Session establishment (single SIWE signature → backend JWT) ───────
 
 /**
@@ -261,4 +280,9 @@ export async function getAudit(auth: OwnerAuthContext): Promise<AuditEntry[]> {
   const res = await authedFetch('/api/audit', auth);
   const body = await jsonOrThrow<{ entries: AuditEntry[] }>(res, 'audit');
   return body.entries;
+}
+
+export async function generateLastWeekReport(auth: OwnerAuthContext): Promise<WeeklyReport> {
+  const res = await authedFetch('/api/reports/last-week', auth, { method: 'POST' });
+  return jsonOrThrow<WeeklyReport>(res, 'last week report');
 }

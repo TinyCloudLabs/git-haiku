@@ -25,6 +25,7 @@ import {
   consumeOwnerPreviewAttempt,
   type HaikuRateLimitResult,
 } from './rate-limit';
+import { generateLastWeekReportForOwner } from './report';
 import { makeSecretsProvider } from './secrets';
 import {
   createCode,
@@ -302,6 +303,19 @@ export async function buildServer(): Promise<FastifyInstance> {
     const ctx = await authenticateOwner(request, reply);
     if (!ctx) return;
     return { entries: await readAudit(ctx.owner.ownerId) };
+  });
+
+  // --- Owner report: previous complete UTC week (OWNER-AUTHENTICATED) ------
+  app.post('/api/reports/last-week', async (request, reply) => {
+    const ctx = await authenticateOwner(request, reply);
+    if (!ctx) return;
+    try {
+      return await generateLastWeekReportForOwner(ctx.owner, secrets);
+    } catch (err) {
+      request.log.error({ err, ownerId: ctx.owner.ownerId }, 'weekly report failed');
+      reply.code(502);
+      return { error: 'report_failed', message: 'could not generate last week report' };
+    }
   });
 
   // --- Requester: code -> haiku (THE egress choke point) -------------------
