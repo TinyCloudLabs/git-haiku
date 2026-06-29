@@ -46,6 +46,7 @@ function sanitizeToSnapshot(payload: unknown): Record<string, unknown> {
 
   if (payload['allowed'] === true) {
     const haiku = isRecord(payload['haiku']) ? payload['haiku'] : undefined;
+    const author = isRecord(payload['author']) ? payload['author'] : undefined;
     const proof = isRecord(payload['proof']) ? payload['proof'] : undefined;
     const rawLines = haiku?.['lines'];
     const lines = Array.isArray(rawLines) ? rawLines.slice() : undefined;
@@ -53,6 +54,7 @@ function sanitizeToSnapshot(payload: unknown): Record<string, unknown> {
     return {
       allowed: true,
       haiku: { lines },
+      author: author ? { githubLogin: author['githubLogin'] } : undefined,
       proof: proof
         ? {
             policy_id: proof['policy_id'],

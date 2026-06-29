@@ -41,6 +41,7 @@ const {
   previewHaiku: vi.fn(async () => ({
     allowed: true as const,
     haiku: { lines: ['autumn commit lands', 'tests turn green beneath the moon', 'merge into the main'] },
+    author: { githubLogin: 'octocat' },
     proof: { policy_id: 'p', image_digest: null, attestation_url: null },
   })),
   signInOwner: vi.fn(async () => ({

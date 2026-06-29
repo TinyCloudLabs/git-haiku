@@ -22,6 +22,9 @@ export interface EgressSuccessPayload {
   readonly haiku: {
     readonly lines: HaikuLines;
   };
+  readonly author: {
+    readonly githubLogin: string;
+  };
   readonly proof: EgressProof;
 }
 

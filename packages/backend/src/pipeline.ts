@@ -32,7 +32,7 @@ import type { OwnerRecord } from './store';
 
 export type PipelineSuccess = {
   ok: true;
-  /** Guarded `{ allowed: true, haiku, proof }`. */
+  /** Guarded `{ allowed: true, haiku, author, proof }`. */
   payload: EgressPayload;
   /** Machine reason for the audit log. */
   auditReason: string;
@@ -117,7 +117,12 @@ export async function generateHaikuForOwner(
 
   // Build + guard the success payload with real (in-TEE) provenance.
   try {
-    const payload = guardOutboundPayload({ allowed: true, haiku: { lines }, proof: await buildProof() });
+    const payload = guardOutboundPayload({
+      allowed: true,
+      haiku: { lines },
+      author: { githubLogin: owner.githubLogin },
+      proof: await buildProof(),
+    });
     return { ok: true, payload, auditReason: 'ok' };
   } catch (err) {
     return denial('internal', 'could not generate the haiku', 503, 'internal_error', err);

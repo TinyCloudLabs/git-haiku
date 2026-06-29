@@ -13,6 +13,9 @@ const validSuccess: EgressPayload = {
   haiku: {
     lines: ['old branches whisper', 'commit lanterns light the path', 'spring merges quietly'],
   },
+  author: {
+    githubLogin: 'octocat',
+  },
   proof: {
     policy_id: EGRESS_POLICY_ID,
     image_digest: 'sha256:0123456789abcdef',
@@ -28,10 +31,15 @@ describe('guardOutbound', () => {
   it('strips extra data-bearing fields from success payloads (sanitize first)', () => {
     const guarded = guardOutboundPayload({
       ...validSuccess,
+      author: {
+        githubLogin: 'octocat',
+        secret: 'hidden-token',
+      },
       commits: [{ message: 'secret commit message' }],
     });
     expect(guarded).toEqual(validSuccess);
     expect(guarded).not.toHaveProperty('commits');
+    expect(guarded.author).not.toHaveProperty('secret');
   });
 
   it('rejects malformed haiku shapes', () => {
@@ -177,6 +185,9 @@ describe('sanitize-before-validate (dev placeholder + snapshot identity)', () =>
       allowed: true,
       haiku: {
         lines: ['old branches whisper', 'commit lanterns light the path', 'spring merges quietly'],
+      },
+      author: {
+        githubLogin: 'octocat',
       },
       proof: {
         policy_id: EGRESS_POLICY_ID,

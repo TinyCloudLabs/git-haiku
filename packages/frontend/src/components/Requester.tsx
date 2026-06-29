@@ -58,6 +58,25 @@ export function Requester({ initialCode = '' }: { initialCode?: string }) {
                 {line}
               </p>
             ))}
+            <p className="author-line">
+              -{' '}
+              <a
+                href={`https://github.com/${result.author.githubLogin}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                @{result.author.githubLogin}
+              </a>{' '}
+              (
+              <a
+                href={`https://github.com/${result.author.githubLogin}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                github.com/{result.author.githubLogin}
+              </a>
+              )
+            </p>
             <p className="proof">
               policy: {result.proof.policy_id} · attestation:{' '}
               {result.proof.attestation_url ? (
