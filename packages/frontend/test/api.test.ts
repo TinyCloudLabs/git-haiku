@@ -101,6 +101,7 @@ describe('previewHaiku', () => {
       {
         allowed: true,
         haiku: { lines: ['one two three four five', 'six seven eight nine ten eleven', 'twelve thirteen'] },
+        author: { githubLogin: 'octocat' },
         proof: { policy_id: 'p', image_digest: null, attestation_url: null },
       },
       200,

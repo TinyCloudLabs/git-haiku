@@ -55,7 +55,12 @@ describe('RedpillHaikuGenerator', () => {
     const lines = await new RedpillHaikuGenerator().generate(COMMITS);
     expect(lines).toHaveLength(3);
 
-    const guarded = guardOutboundPayload({ allowed: true, haiku: { lines }, proof: devProof() });
+    const guarded = guardOutboundPayload({
+      allowed: true,
+      haiku: { lines },
+      author: { githubLogin: 'octocat' },
+      proof: devProof(),
+    });
     expect('haiku' in guarded && guarded.haiku.lines).toEqual(lines);
   });
 
@@ -86,7 +91,12 @@ describe('RedpillHaikuGenerator', () => {
     // branch; the guard only ever sees a denial. Prove the guard rejects an
     // attempt to smuggle commit data via a malformed "success".
     expect(() =>
-      guardOutboundPayload({ allowed: true, haiku: { lines: ['x'] }, proof: devProof() }),
+      guardOutboundPayload({
+        allowed: true,
+        haiku: { lines: ['x'] },
+        author: { githubLogin: 'octocat' },
+        proof: devProof(),
+      }),
     ).toThrow(OutboundGuardError);
   });
 });

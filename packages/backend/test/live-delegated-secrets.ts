@@ -281,7 +281,12 @@ async function main(): Promise<void> {
     const { devProof } = await import('../src/proof');
     const { commits } = await fetchRecentCommits({ githubLogin: GITHUB_LOGIN, githubToken: null });
     const lines = await makeHaikuGenerator().generate(commits);
-    const guarded = guardOutboundPayload({ allowed: true, haiku: { lines }, proof: devProof() });
+    const guarded = guardOutboundPayload({
+      allowed: true,
+      haiku: { lines },
+      author: { githubLogin: GITHUB_LOGIN },
+      proof: devProof(),
+    });
     log(`rendered guarded haiku: ${JSON.stringify(guarded)}`);
     if (!('haiku' in guarded) || guarded.haiku.lines.length !== 3) {
       throw new Error('rendered haiku was not a guarded 3-line haiku');

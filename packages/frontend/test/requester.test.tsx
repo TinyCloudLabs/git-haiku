@@ -17,6 +17,7 @@ describe('Requester', () => {
     requestHaiku.mockResolvedValue({
       allowed: true,
       haiku: { lines: ['line one here', 'a second line appears now', 'and then the third'] },
+      author: { githubLogin: 'skgbafa' },
       proof: { policy_id: 'secret-code-v1', image_digest: null, attestation_url: null },
     });
     const user = userEvent.setup();
@@ -26,6 +27,11 @@ describe('Requester', () => {
     await user.click(screen.getByRole('button', { name: /get haiku/i }));
 
     await screen.findByText('line one here');
+    const author = await screen.findByRole('link', { name: '@skgbafa' });
+    expect(author.getAttribute('href')).toBe('https://github.com/skgbafa');
+    expect(screen.getByRole('link', { name: 'github.com/skgbafa' }).getAttribute('href')).toBe(
+      'https://github.com/skgbafa',
+    );
     expect(screen.getByText(/policy: secret-code-v1/)).toBeTruthy();
     // MCP panel appears for a valid code.
     await screen.findByText(/use it from an agent \(mcp\)/i);

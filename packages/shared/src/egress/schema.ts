@@ -5,9 +5,9 @@ import { POLICY_ID } from './types';
  *
  * Every backend response is built into a plain snapshot and validated against
  * this schema before serialization. `additionalProperties: false` everywhere is
- * the load-bearing guarantee: the only data-bearing success field is
- * `haiku.lines`; denials carry only a short printable `reason` and never commit
- * data.
+ * the load-bearing guarantee: success carries only `haiku.lines`, the owner's
+ * public GitHub login, and proof metadata; denials carry only a short printable
+ * `reason` and never commit data.
  */
 export const egressSchema = {
   $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -15,7 +15,7 @@ export const egressSchema = {
     {
       type: 'object',
       additionalProperties: false,
-      required: ['allowed', 'haiku', 'proof'],
+      required: ['allowed', 'haiku', 'author', 'proof'],
       properties: {
         allowed: {
           const: true,
@@ -41,6 +41,19 @@ export const egressSchema = {
               items: false,
               minItems: 3,
               maxItems: 3,
+            },
+          },
+        },
+        author: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['githubLogin'],
+          properties: {
+            githubLogin: {
+              type: 'string',
+              minLength: 1,
+              maxLength: 39,
+              pattern: '^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$',
             },
           },
         },

@@ -45,6 +45,7 @@ export interface ServerInfo {
 export interface HaikuSuccess {
   allowed: true;
   haiku: { lines: [string, string, string] };
+  author: { githubLogin: string };
   proof: { policy_id: string; image_digest: string | null; attestation_url: string | null };
 }
 export interface HaikuDenial {
@@ -59,6 +60,7 @@ export type PreviewStage = 'secrets' | 'github' | 'generate' | 'internal';
 export interface PreviewSuccess {
   allowed: true;
   haiku: { lines: [string, string, string] };
+  author: { githubLogin: string };
   proof: { policy_id: string; image_digest: string | null; attestation_url: string | null };
 }
 export interface PreviewDenial {
