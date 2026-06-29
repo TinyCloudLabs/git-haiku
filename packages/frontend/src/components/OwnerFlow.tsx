@@ -226,7 +226,11 @@ function SetupPhase({
             Outputs are constrained to haikus and weekly reports. Denials and errors never include
             raw commits or token data.
           </li>
-          <li>Shared access is controlled by your codes; rotate or revoke codes any time.</li>
+          <li>
+            Generated haikus and reports are cached with a commit fingerprint. If there are no new
+            commits, shared links reuse the last generation.
+          </li>
+          <li>Only you, while signed in, can force a fresh generation from the owner dashboard.</li>
         </ul>
       </div>
 
