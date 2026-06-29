@@ -222,7 +222,7 @@ describe('OwnerFlow', () => {
     expect(getOwner).toHaveBeenCalled();
   });
 
-  it('copies share URLs from the existing codes table', async () => {
+  it('copies haiku and report share URLs from the existing codes table', async () => {
     const writeText = vi.spyOn(navigator.clipboard, 'writeText');
     getOwner.mockResolvedValueOnce({
       ownerId: 'own_1',
@@ -241,6 +241,13 @@ describe('OwnerFlow', () => {
 
     expect(writeText).toHaveBeenCalledWith('http://localhost:3000/u/own_1?code=aaaa-bbbb-cccc-dddd');
     await screen.findByRole('button', { name: /copied/i });
+
+    const copyReport = await screen.findByTestId('copy-report-url-cid1');
+    await user.click(copyReport);
+
+    expect(writeText).toHaveBeenCalledWith(
+      'http://localhost:3000/u/own_1?code=aaaa-bbbb-cccc-dddd&kind=report',
+    );
   });
 
   it('previews the haiku end-to-end from the dashboard', async () => {

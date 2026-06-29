@@ -1,42 +1,75 @@
 import { useState } from 'react';
 
-import { requestHaiku, type HaikuResponse } from '../api';
+import { requestHaiku, requestWeeklyReport, type HaikuResponse, type WeeklyReportResponse } from '../api';
 import { McpInstructions } from './McpInstructions';
+import { WeeklyReportCard } from './WeeklyReportCard';
 
 /**
- * Requester surface: enter a secret code → get a three-line haiku. Plus the MCP
- * setup panel so an agent can fetch haikus with the same code.
+ * Requester surface: enter a secret code → get a haiku or weekly report.
  */
-export function Requester({ initialCode = '' }: { initialCode?: string }) {
+type RequestKind = 'haiku' | 'report';
+
+export function Requester({
+  initialCode = '',
+  initialKind = 'haiku',
+}: {
+  initialCode?: string;
+  initialKind?: RequestKind;
+}) {
   const [code, setCode] = useState(initialCode);
+  const [kind, setKind] = useState<RequestKind>(initialKind);
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<HaikuResponse | null>(null);
+  const [haikuResult, setHaikuResult] = useState<HaikuResponse | null>(null);
+  const [reportResult, setReportResult] = useState<WeeklyReportResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
-    setResult(null);
+    setHaikuResult(null);
+    setReportResult(null);
     setError(null);
     try {
-      setResult(await requestHaiku(code.trim()));
+      if (kind === 'haiku') {
+        setHaikuResult(await requestHaiku(code.trim()));
+      } else {
+        setReportResult(await requestWeeklyReport(code.trim()));
+      }
     } catch {
-      setError('Could not reach the haiku service.');
+      setError(kind === 'haiku' ? 'Could not reach the haiku service.' : 'Could not reach the report service.');
     } finally {
       setLoading(false);
     }
   }
 
-  const validCode = result?.allowed ? code.trim() : '';
+  const validHaikuCode = haikuResult?.allowed ? code.trim() : '';
+  const submitLabel = kind === 'haiku' ? 'Get Haiku' : 'Get Report';
+  const loadingLabel = kind === 'haiku' ? 'Composing…' : 'Writing…';
 
   return (
     <section className="stack">
       <div className="card">
         <h2>Enter the secret code</h2>
         <p className="muted">
-          One code in, a three-line haiku out — distilled from the owner&apos;s recent commit
-          messages inside an attested TEE. Nothing else ever leaves.
+          One code can fetch a three-line haiku or the owner&apos;s last-week report, both
+          generated from commit metadata inside an attested TEE.
         </p>
+        <div className="segmented" role="group" aria-label="request type">
+          <button
+            type="button"
+            className={kind === 'haiku' ? 'segment active' : 'segment'}
+            onClick={() => setKind('haiku')}
+          >
+            Haiku
+          </button>
+          <button
+            type="button"
+            className={kind === 'report' ? 'segment active' : 'segment'}
+            onClick={() => setKind('report')}
+          >
+            Weekly report
+          </button>
+        </div>
         <form onSubmit={onSubmit} className="form">
           <input
             className="input mono"
@@ -47,13 +80,13 @@ export function Requester({ initialCode = '' }: { initialCode?: string }) {
             aria-label="secret code"
           />
           <button className="primary" disabled={loading || !code.trim()}>
-            {loading ? 'Composing…' : 'Get Haiku'}
+            {loading ? loadingLabel : submitLabel}
           </button>
         </form>
 
-        {result && result.allowed && (
+        {haikuResult && haikuResult.allowed && (
           <div className="haiku">
-            {result.haiku.lines.map((line, i) => (
+            {haikuResult.haiku.lines.map((line, i) => (
               <p key={i} className="haiku-line">
                 {line}
               </p>
@@ -61,26 +94,26 @@ export function Requester({ initialCode = '' }: { initialCode?: string }) {
             <p className="author-line">
               -{' '}
               <a
-                href={`https://github.com/${result.author.githubLogin}`}
+                href={`https://github.com/${haikuResult.author.githubLogin}`}
                 target="_blank"
                 rel="noreferrer"
               >
-                @{result.author.githubLogin}
+                @{haikuResult.author.githubLogin}
               </a>{' '}
               (
               <a
-                href={`https://github.com/${result.author.githubLogin}`}
+                href={`https://github.com/${haikuResult.author.githubLogin}`}
                 target="_blank"
                 rel="noreferrer"
               >
-                github.com/{result.author.githubLogin}
+                github.com/{haikuResult.author.githubLogin}
               </a>
               )
             </p>
             <p className="proof">
-              policy: {result.proof.policy_id} · attestation:{' '}
-              {result.proof.attestation_url ? (
-                <a href={result.proof.attestation_url} target="_blank" rel="noreferrer">
+              policy: {haikuResult.proof.policy_id} · attestation:{' '}
+              {haikuResult.proof.attestation_url ? (
+                <a href={haikuResult.proof.attestation_url} target="_blank" rel="noreferrer">
                   verify
                 </a>
               ) : (
@@ -90,16 +123,24 @@ export function Requester({ initialCode = '' }: { initialCode?: string }) {
           </div>
         )}
 
-        {result && !result.allowed && (
+        {haikuResult && !haikuResult.allowed && (
           <div className="denial">
-            <strong>No haiku.</strong> {result.reason}
+            <strong>No haiku.</strong> {haikuResult.reason}
+          </div>
+        )}
+
+        {reportResult && !reportResult.allowed && (
+          <div className="denial">
+            <strong>No report.</strong> {reportResult.reason}
           </div>
         )}
 
         {error && <div className="denial">{error}</div>}
       </div>
 
-      {validCode && <McpInstructions code={validCode} />}
+      {reportResult && reportResult.allowed && <WeeklyReportCard report={reportResult.report} />}
+
+      {validHaikuCode && <McpInstructions code={validHaikuCode} />}
     </section>
   );
 }

@@ -6,6 +6,7 @@ import {
   previewHaiku,
   registerOwner,
   requestNonce,
+  requestWeeklyReport,
   sendDelegation,
   verifySession,
   type OwnerAuthContext,
@@ -155,5 +156,29 @@ describe('previewHaiku', () => {
   it('throws when the body is not a valid preview shape', async () => {
     mockBackend({ oops: true }, 500);
     await expect(previewHaiku(auth)).rejects.toThrow(/preview failed/);
+  });
+});
+
+describe('requestWeeklyReport', () => {
+  it('POSTs the share code to the public report endpoint', async () => {
+    const { captured } = mockBackend({
+      allowed: true,
+      report: {
+        githubLogin: 'octocat',
+        generatedAt: '2026-06-29T00:00:00Z',
+        range: { start: '2026-06-22', end: '2026-06-28' },
+        commitCount: 1,
+        generatedBy: 'deterministic',
+        overview: 'Shipped one focused change.',
+        days: [],
+      },
+    });
+
+    const report = await requestWeeklyReport('aaaa-bbbb');
+
+    expect(captured.method).toBe('POST');
+    expect(captured.url).toContain('/api/reports/last-week/share');
+    expect(JSON.parse(captured.body!)).toEqual({ code: 'aaaa-bbbb' });
+    expect(report.allowed).toBe(true);
   });
 });

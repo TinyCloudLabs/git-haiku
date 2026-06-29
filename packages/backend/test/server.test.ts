@@ -235,6 +235,56 @@ describe('POST /api/reports/last-week', () => {
   });
 });
 
+describe('POST /api/reports/last-week/share', () => {
+  it('returns a clean denial for an invalid share code', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/reports/last-week/share',
+      payload: { code: 'wrong-code' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({ allowed: false, reason: 'invalid code' });
+  });
+
+  it('returns a report for a valid share code without echoing the GitHub token', async () => {
+    const day = new Date();
+    day.setUTCHours(0, 0, 0, 0);
+    const currentWeekStart = new Date(day.getTime() - ((day.getUTCDay() + 6) % 7) * 24 * 60 * 60 * 1000);
+    const previousWeekStart = new Date(currentWeekStart.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const commitDate = new Date(previousWeekStart.getTime() + 12 * 60 * 60 * 1000).toISOString();
+    const commitFixture = JSON.stringify({
+      items: [
+        {
+          repository: { full_name: 'octocat/hello' },
+          commit: { message: 'feat: share weekly report', author: { date: commitDate } },
+        },
+      ],
+    });
+    const owner = createOwner({ githubLogin: 'octocat', githubToken: 'ghp_shared_report' });
+
+    const realFetch = global.fetch;
+    global.fetch = (async () => new Response(commitFixture, { status: 200 })) as typeof fetch;
+    try {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/reports/last-week/share',
+        payload: { code: owner.secretCode },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.allowed).toBe(true);
+      expect(body.report.githubLogin).toBe('octocat');
+      expect(body.report.days).toHaveLength(7);
+      expect(body.report.commitCount).toBe(1);
+      expect(JSON.stringify(body.report.days)).toContain('hello: feat: share weekly report');
+      expect(res.body).not.toContain('ghp_shared_report');
+      expect(res.body).not.toContain(owner.secretCode);
+    } finally {
+      global.fetch = realFetch;
+    }
+  });
+});
+
 describe('code management (create / revoke / rotate)', () => {
   it('lists, creates, rotates and revokes codes — gated by owner auth', async () => {
     // Wallet 4 = this owner.

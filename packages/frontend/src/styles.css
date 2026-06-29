@@ -223,6 +223,40 @@ body {
   flex-wrap: wrap;
   margin-top: 14px;
 }
+.share-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  margin: 4px 0 16px;
+  background: #fff;
+}
+.segment {
+  border: 0;
+  border-right: 1px solid var(--line);
+  background: transparent;
+  color: var(--moss-dark);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  padding: 9px 12px;
+}
+.segment:last-child {
+  border-right: 0;
+}
+.segment.active {
+  background: #eef2ee;
+  color: var(--ink);
+}
+.segment:focus-visible {
+  outline: 2px solid var(--moss);
+  outline-offset: -2px;
+}
 .brand {
   background: none;
   border: none;
