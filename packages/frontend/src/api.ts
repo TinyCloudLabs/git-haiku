@@ -276,11 +276,17 @@ export async function revokeCode(
  * GitHub activity → generate → guard) and return the haiku WITHOUT minting a
  * code. Success is HTTP 200 `{allowed:true, haiku, proof}`; a staged failure is
  * non-2xx `{allowed:false, reason, stage}`. We read the JSON body in BOTH cases
- * so the caller can key its message off `stage`. No request body; owner SIWE
- * auth headers only.
+ * so the caller can key its message off `stage`. `{ force: true }` bypasses the
+ * generation cache; owner SIWE auth headers are always required.
  */
-export async function previewHaiku(auth: OwnerAuthContext): Promise<PreviewResponse> {
-  const res = await authedFetch('/api/preview', auth, { method: 'POST' });
+export async function previewHaiku(
+  auth: OwnerAuthContext,
+  options: { force?: boolean } = {},
+): Promise<PreviewResponse> {
+  const res = await authedFetch('/api/preview', auth, {
+    method: 'POST',
+    body: JSON.stringify({ force: options.force === true }),
+  });
   const body = (await res.json().catch(() => null)) as PreviewResponse | null;
   if (!body || typeof body.allowed !== 'boolean') {
     throw new Error(`preview failed (${res.status})`);
@@ -294,7 +300,13 @@ export async function getAudit(auth: OwnerAuthContext): Promise<AuditEntry[]> {
   return body.entries;
 }
 
-export async function generateLastWeekReport(auth: OwnerAuthContext): Promise<WeeklyReport> {
-  const res = await authedFetch('/api/reports/last-week', auth, { method: 'POST' });
+export async function generateLastWeekReport(
+  auth: OwnerAuthContext,
+  options: { force?: boolean } = {},
+): Promise<WeeklyReport> {
+  const res = await authedFetch('/api/reports/last-week', auth, {
+    method: 'POST',
+    body: JSON.stringify({ force: options.force === true }),
+  });
   return jsonOrThrow<WeeklyReport>(res, 'last week report');
 }

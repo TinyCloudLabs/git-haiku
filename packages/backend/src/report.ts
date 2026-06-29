@@ -1,5 +1,6 @@
 import { config } from './config';
-import { fetchCommitsInRange, type CommitMeta } from './github';
+import { readCachedWeeklyReport, writeCachedWeeklyReport } from './generation-cache';
+import { fetchCommitsInRange, fingerprintCommits, type CommitMeta } from './github';
 import type { SecretsProvider } from './secrets';
 import type { OwnerRecord } from './store';
 
@@ -33,6 +34,7 @@ export async function generateLastWeekReportForOwner(
   owner: OwnerRecord,
   secrets: SecretsProvider,
   now = new Date(),
+  options: { force?: boolean } = {},
 ): Promise<WeeklyReport> {
   const { start, end, days } = lastCompleteUtcWeek(now);
   const githubToken = (await secrets.getOwnerSecrets(owner)).githubToken;
@@ -43,8 +45,14 @@ export async function generateLastWeekReportForOwner(
     until: end,
     maxCommits: 100,
   });
+  const commitFingerprint = fingerprintCommits(commits);
+  const scope = `${toDateKey(start)}:${toDateKey(new Date(end.getTime() - DAY_MS))}`;
+  if (!options.force) {
+    const cached = readCachedWeeklyReport(owner.ownerId, scope, commitFingerprint);
+    if (cached) return cached;
+  }
 
-  return buildWeeklyReport({
+  const report = await buildWeeklyReport({
     githubLogin: owner.githubLogin,
     commits,
     start,
@@ -52,6 +60,8 @@ export async function generateLastWeekReportForOwner(
     days,
     generatedAt: now,
   });
+  writeCachedWeeklyReport(owner.ownerId, scope, commitFingerprint, report);
+  return report;
 }
 
 export function lastCompleteUtcWeek(now = new Date()): {

@@ -309,8 +309,10 @@ export async function buildServer(): Promise<FastifyInstance> {
   app.post('/api/reports/last-week', async (request, reply) => {
     const ctx = await authenticateOwner(request, reply);
     if (!ctx) return;
+    const body = (request.body ?? {}) as { force?: unknown };
+    const force = body.force === true;
     try {
-      return await generateLastWeekReportForOwner(ctx.owner, secrets);
+      return await generateLastWeekReportForOwner(ctx.owner, secrets, new Date(), { force });
     } catch (err) {
       request.log.error({ err, ownerId: ctx.owner.ownerId }, 'weekly report failed');
       reply.code(502);
@@ -425,13 +427,15 @@ export async function buildServer(): Promise<FastifyInstance> {
 
     const ctx = await authenticateOwner(request, reply);
     if (!ctx) return;
+    const body = (request.body ?? {}) as { force?: unknown };
+    const force = body.force === true;
 
     const previewLimit = consumeOwnerPreviewAttempt(ctx.owner.ownerId);
     if (!previewLimit.allowed) {
       return sendRateLimited(reply, previewLimit);
     }
 
-    const result = await generateHaikuForOwner(ctx.owner, secrets);
+    const result = await generateHaikuForOwner(ctx.owner, secrets, { force });
 
     if (result.ok) {
       await recordAudit({ code: '', ownerId: ctx.owner.ownerId, decision: 'allow', reason: 'preview_ok' });

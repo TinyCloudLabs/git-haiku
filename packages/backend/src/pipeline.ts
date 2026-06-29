@@ -4,7 +4,8 @@ import {
   guardOutboundPayload,
 } from '@githaiku/shared';
 
-import { fetchRecentCommits } from './github';
+import { readCachedHaiku, writeCachedHaiku } from './generation-cache';
+import { fetchRecentCommits, fingerprintCommits } from './github';
 import { makeHaikuGenerator } from './haiku';
 import { buildProof } from './proof';
 import type { SecretsProvider } from './secrets';
@@ -78,6 +79,7 @@ function denial(
 export async function generateHaikuForOwner(
   owner: OwnerRecord,
   secrets: SecretsProvider,
+  options: { force?: boolean } = {},
 ): Promise<PipelineResult> {
   // 1. secrets — read the owner's GITHUB_TOKEN (sdk: under their delegation).
   let githubToken: string | null;
@@ -107,6 +109,14 @@ export async function generateHaikuForOwner(
     };
   }
 
+  const commitFingerprint = fingerprintCommits(commits);
+  if (!options.force) {
+    const cached = readCachedHaiku(owner.ownerId, commitFingerprint);
+    if (cached) {
+      return { ok: true, payload: guardOutboundPayload(cached), auditReason: 'cache_hit' };
+    }
+  }
+
   // 3. generate — render the haiku.
   let lines;
   try {
@@ -123,6 +133,7 @@ export async function generateHaikuForOwner(
       author: { githubLogin: owner.githubLogin },
       proof: await buildProof(),
     });
+    writeCachedHaiku(owner.ownerId, commitFingerprint, payload);
     return { ok: true, payload, auditReason: 'ok' };
   } catch (err) {
     return denial('internal', 'could not generate the haiku', 503, 'internal_error', err);

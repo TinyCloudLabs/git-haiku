@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { config } from './config';
 
 /**
@@ -17,6 +19,14 @@ export interface FetchResult {
   commits: CommitMeta[];
   /** True when the built-in dev fixture was used (no GitHub token present). */
   usedFixture: boolean;
+}
+
+export function fingerprintCommits(commits: CommitMeta[]): string {
+  const basis = commits
+    .map((commit) => `${commit.repo}|${commit.message}|${commit.timestamp}`)
+    .sort()
+    .join('\n');
+  return createHash('sha256').update(basis).digest('hex');
 }
 
 /**

@@ -18,12 +18,12 @@ export function PreviewHaiku({ auth }: { auth: OwnerAuthContext }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  async function run() {
+  async function run(force = false) {
     setBusy(true);
     setError(null);
     setResult(null);
     try {
-      setResult(await previewHaiku(auth));
+      setResult(await previewHaiku(auth, { force }));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'preview failed');
     } finally {
@@ -38,9 +38,21 @@ export function PreviewHaiku({ auth }: { auth: OwnerAuthContext }) {
         Run the full pipeline once — read your stored token, fetch your recent GitHub activity, and
         generate a haiku — without minting or sharing a code.
       </p>
-      <button className="primary" data-testid="preview-run" onClick={() => void run()} disabled={busy}>
-        {busy ? 'Generating…' : 'Preview / test haiku'}
-      </button>
+      <div className="row">
+        <button className="primary" data-testid="preview-run" onClick={() => void run()} disabled={busy}>
+          {busy ? 'Generating…' : result ? 'Preview cached haiku' : 'Preview / test haiku'}
+        </button>
+        {result?.allowed && (
+          <button
+            className="ghost"
+            data-testid="preview-regenerate"
+            onClick={() => void run(true)}
+            disabled={busy}
+          >
+            Regenerate haiku
+          </button>
+        )}
+      </div>
 
       {error && <div className="denial">{error}</div>}
 
