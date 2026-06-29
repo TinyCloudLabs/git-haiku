@@ -53,8 +53,10 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          # Existing org packages may not grant write_package to GITHUB_TOKEN.
+          # Set GHCR_PAT/GHCR_USERNAME when the fallback token is denied.
+          username: ${{ secrets.GHCR_USERNAME || github.actor }}
+          password: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
 
       - name: Build and push backend image
         id: build
