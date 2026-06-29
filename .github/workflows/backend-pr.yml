@@ -1,0 +1,60 @@
+name: Backend PR
+
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - docker-compose.phala.yml
+      - phala.toml
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - tsconfig.base.json
+      - packages/backend/**
+      - packages/shared/**
+      - .github/workflows/backend-pr.yml
+      - .github/workflows/backend-deploy.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Test and build backend image
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.3
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Backend tests
+        run: pnpm --filter @githaiku/backend test
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          tags: githaiku-backend:pr-${{ github.event.pull_request.number }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
