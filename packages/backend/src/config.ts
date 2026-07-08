@@ -100,6 +100,19 @@ export const config = {
     maxCommits: Number(process.env['GITHAIKU_MAX_COMMITS'] ?? 30),
     windowDays: Number(process.env['GITHAIKU_WINDOW_DAYS'] ?? 30),
   },
+
+  /**
+   * Build/deploy provenance surfaced on the public /info endpoint so
+   * internal.tinycloud.xyz can detect a stale deploy. `version` is the backend
+   * package version (display-only). `gitSha` is the deploy's full commit SHA and
+   * is the field the dashboard's delta actually compares against the repo's
+   * default-branch HEAD (git-haiku cuts no releases/tags). Injected at image
+   * build time via the Dockerfile `GIT_SHA` build-arg -> ENV; empty in local dev.
+   */
+  build: {
+    version: process.env['GITHAIKU_VERSION'] ?? '0.0.0',
+    gitSha: process.env['GIT_SHA'] ?? null,
+  },
 } as const;
 
 export type AppConfig = typeof config;

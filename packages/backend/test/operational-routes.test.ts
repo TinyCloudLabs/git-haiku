@@ -29,6 +29,18 @@ describe('public operational routes', () => {
     expect(JSON.parse(res.body)).toEqual({ ok: true });
   });
 
+  it('/info reports deploy provenance (service + version, unauthenticated)', async () => {
+    const res = await app.inject({ method: 'GET', url: '/info' });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.service).toBe('githaiku-backend');
+    expect(typeof body.version).toBe('string');
+    // env is 'local' outside a verified TEE (no dstack in the test env).
+    expect(body.env).toBe('local');
+    // gitSha is omitted when GIT_SHA is unset (local/dev), present in a deploy.
+    expect('gitSha' in body).toBe(false);
+  });
+
   it('/api/server-info does not disclose provider state outside sdk mode', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/server-info' });
     expect(res.statusCode).toBe(404);

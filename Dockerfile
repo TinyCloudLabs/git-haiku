@@ -47,6 +47,13 @@ ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
 RUN corepack enable
 
+# Deploy provenance surfaced on GET /info for stale-deploy detection by
+# internal.tinycloud.xyz. GIT_SHA is the delta signal the dashboard compares
+# against the repo default-branch HEAD; pass it at build time, e.g.:
+#   docker buildx build --platform linux/amd64 --build-arg GIT_SHA=$(git rev-parse HEAD) ...
+ARG GIT_SHA=""
+ENV GIT_SHA=${GIT_SHA}
+
 # Runtime carries the deployed backend package: package.json, dist, and
 # production node_modules only.
 COPY --from=prod-deps /runtime ./
