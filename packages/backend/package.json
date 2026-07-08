@@ -18,8 +18,8 @@
   "dependencies": {
     "@fastify/cors": "^10.0.1",
     "@phala/dstack-sdk": "0.5.8",
-    "@tinycloud/node-sdk": "2.4.0-beta.19",
-    "@tinycloud/server": "github:TinyCloudLabs/js-sdk#81269b3fef874e476384cd29b4b50c2cc06db5d0&path:/packages/server",
+    "@tinycloud/node-sdk": "2.5.1",
+    "@tinycloud/server": "2.4.2",
     "fastify": "^5.1.0",
     "siwe": "^2.3.2",
     "viem": "^2.21.0"

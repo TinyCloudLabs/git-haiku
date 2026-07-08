@@ -30,11 +30,11 @@ importers:
         specifier: 0.5.8
         version: 0.5.8(@noble/curves@1.9.7)(@noble/hashes@1.8.0)(viem@2.52.2(typescript@5.9.3)(zod@3.25.76))
       '@tinycloud/node-sdk':
-        specifier: 2.4.0-beta.19
-        version: 2.4.0-beta.19(ethers@6.16.0)(typescript@5.9.3)
+        specifier: 2.5.1
+        version: 2.5.1(ethers@6.16.0)(typescript@5.9.3)
       '@tinycloud/server':
-        specifier: github:TinyCloudLabs/js-sdk#81269b3fef874e476384cd29b4b50c2cc06db5d0&path:/packages/server
-        version: https://codeload.github.com/TinyCloudLabs/js-sdk/tar.gz/81269b3fef874e476384cd29b4b50c2cc06db5d0#path:/packages/server(ethers@6.16.0)(typescript@5.9.3)(zod@3.25.76)
+        specifier: 2.4.2
+        version: 2.4.2(ethers@6.16.0)(typescript@5.9.3)(zod@3.25.76)
       fastify:
         specifier: ^5.1.0
         version: 5.8.5
@@ -933,6 +933,9 @@ packages:
     peerDependencies:
       '@testing-library/dom': '>=7.21.4'
 
+  '@tinycloud/bootstrap@2.4.1':
+    resolution: {integrity: sha512-7Mgf9kcD5I2iLb9SSma+VyWcOCwEediNOP1x/UElOH0vMwH5osPuRrE9M6hbBDn8/FYVQ6MDCKzksBDpgh4FPg==}
+
   '@tinycloud/node-sdk-wasm@1.7.4':
     resolution: {integrity: sha512-hOzqatgIGbvfOUslXeXVOP1QvcH+iipfDDseBKpnc2Db7bxzGAc06aQXyZSujkftsvgezS2eVBx9gai37BageQ==}
     engines: {node: '>=18'}
@@ -941,25 +944,24 @@ packages:
     resolution: {integrity: sha512-L2G+AnsytkbdIQq1r0vnzWFvmFczuXD7lMvl7Xpnek3QvlhAOfnKiAFJ/drzvKyW1g6zvoW9YllS9Zn7eXPlRA==}
     engines: {node: '>=18'}
 
-  '@tinycloud/node-sdk@2.4.0-beta.19':
-    resolution: {integrity: sha512-onVHa5H2P3SxZCaJy2ZhVae8ni7ifEXGrLs26zZvf6o8hyS48n1gd3sC/50i8jejGCKOEIPm6tU/+KfWjfJdEA==}
+  '@tinycloud/node-sdk@2.5.1':
+    resolution: {integrity: sha512-psP6P/XZU5WLIY+K9ZFn8ThY6BeP6UYUY99bsbSsVM6os538Oae8Sii2JCz/D/u7r4nZlp+8khsUjtkZALK8BA==}
     engines: {node: '>=18'}
 
   '@tinycloud/sdk-core@2.4.0-beta.17':
     resolution: {integrity: sha512-Zj0uhS038p4Ptsd8Dt2Jvg42IvekAQXhDIIQjI8ONedINQ/skGUwj9rGk7LizhnOfbPmxpDxZq8Lt9Sbsm8MfA==}
 
-  '@tinycloud/sdk-core@2.4.0-beta.19':
-    resolution: {integrity: sha512-leDh/09pp5+EY5339En9LDD/gY9b9m/oLLkx02XlHtNDlbLmd/FBlx4c9qYIsWazsCFUYkLtnPpBTnl9zztpiA==}
+  '@tinycloud/sdk-core@2.5.1':
+    resolution: {integrity: sha512-XVVnoK2CE4ZWUQf+nTr+3IRGOsRuJZVEQde+NXf8KHoliGqJ9Yha29lZcAjXO26n7IT2qxalLciDU+mPSSUuxg==}
 
   '@tinycloud/sdk-services@2.4.0-beta.16':
     resolution: {integrity: sha512-qE2zI8euHtWuFqnjQ1tAE9odVhPJ2FKvu/6ngaByip1B/bqipFhSvzrMvSjXtrLjZjr76CV+CtXOILfs5qm7fw==}
 
-  '@tinycloud/sdk-services@2.4.0-beta.19':
-    resolution: {integrity: sha512-2todoIx3SchX5IFC2uS5XUlSYGZJwp4b7/agUhZHPzViruTqKJHuCCHgagRwsc4y+gyBquK66I3rxceJr8kOBQ==}
+  '@tinycloud/sdk-services@2.4.2':
+    resolution: {integrity: sha512-LxCH+Ss8aIGW6UIPbpqvnNPe38iDT9BMOCSJ2+sJ+/wPSDp0UtezpCBEOY29pssF68DI+RAvorGQ9Y3u6IbCDA==}
 
-  '@tinycloud/server@https://codeload.github.com/TinyCloudLabs/js-sdk/tar.gz/81269b3fef874e476384cd29b4b50c2cc06db5d0#path:/packages/server':
-    resolution: {path: /packages/server, tarball: https://codeload.github.com/TinyCloudLabs/js-sdk/tar.gz/81269b3fef874e476384cd29b4b50c2cc06db5d0}
-    version: 2.4.0-beta.19
+  '@tinycloud/server@2.4.2':
+    resolution: {integrity: sha512-RavOKcBkrCx2lZ8+9ZBLQRSn4+y6PNqbLoRyoZWsE8g/ARKvJ7VF47vCSGgZz1lCYkH98UJBJSdnMd+lzuGvhw==}
     engines: {node: '>=18'}
 
   '@tinycloud/web-sdk-wasm@1.7.4':
@@ -3230,6 +3232,15 @@ snapshots:
     dependencies:
       '@testing-library/dom': 10.4.1
 
+  '@tinycloud/bootstrap@2.4.1(typescript@5.9.3)(zod@3.25.76)':
+    dependencies:
+      viem: 2.52.2(typescript@5.9.3)(zod@3.25.76)
+    transitivePeerDependencies:
+      - bufferutil
+      - typescript
+      - utf-8-validate
+      - zod
+
   '@tinycloud/node-sdk-wasm@1.7.4': {}
 
   '@tinycloud/node-sdk@2.4.0-beta.18(ethers@5.8.0)(typescript@5.9.3)':
@@ -3243,10 +3254,10 @@ snapshots:
       - typescript
       - utf-8-validate
 
-  '@tinycloud/node-sdk@2.4.0-beta.19(ethers@6.16.0)(typescript@5.9.3)':
+  '@tinycloud/node-sdk@2.5.1(ethers@6.16.0)(typescript@5.9.3)':
     dependencies:
       '@tinycloud/node-sdk-wasm': 1.7.4
-      '@tinycloud/sdk-core': 2.4.0-beta.19(ethers@6.16.0)(typescript@5.9.3)
+      '@tinycloud/sdk-core': 2.5.1(ethers@6.16.0)(typescript@5.9.3)
       siwe: 3.0.0(ethers@6.16.0)
     transitivePeerDependencies:
       - bufferutil
@@ -3273,13 +3284,14 @@ snapshots:
       - typescript
       - utf-8-validate
 
-  '@tinycloud/sdk-core@2.4.0-beta.19(ethers@6.16.0)(typescript@5.9.3)':
+  '@tinycloud/sdk-core@2.5.1(ethers@6.16.0)(typescript@5.9.3)':
     dependencies:
       '@multiformats/multiaddr': 13.0.3
       '@multiformats/multiaddr-to-uri': 12.0.0
       '@multiformats/uri-to-multiaddr': 10.0.0
       '@noble/curves': 1.9.7
-      '@tinycloud/sdk-services': 2.4.0-beta.19
+      '@tinycloud/bootstrap': 2.4.1(typescript@5.9.3)(zod@3.25.76)
+      '@tinycloud/sdk-services': 2.4.2
       ms: 2.1.3
       multiformats: 13.4.2
       siwe: 3.0.0(ethers@6.16.0)
@@ -3296,14 +3308,14 @@ snapshots:
     dependencies:
       zod: 3.25.76
 
-  '@tinycloud/sdk-services@2.4.0-beta.19':
+  '@tinycloud/sdk-services@2.4.2':
     dependencies:
       zod: 3.25.76
 
-  '@tinycloud/server@https://codeload.github.com/TinyCloudLabs/js-sdk/tar.gz/81269b3fef874e476384cd29b4b50c2cc06db5d0#path:/packages/server(ethers@6.16.0)(typescript@5.9.3)(zod@3.25.76)':
+  '@tinycloud/server@2.4.2(ethers@6.16.0)(typescript@5.9.3)(zod@3.25.76)':
     dependencies:
-      '@tinycloud/node-sdk': 2.4.0-beta.19(ethers@6.16.0)(typescript@5.9.3)
-      '@tinycloud/sdk-core': 2.4.0-beta.19(ethers@6.16.0)(typescript@5.9.3)
+      '@tinycloud/node-sdk': 2.5.1(ethers@6.16.0)(typescript@5.9.3)
+      '@tinycloud/sdk-core': 2.5.1(ethers@6.16.0)(typescript@5.9.3)
       viem: 2.52.2(typescript@5.9.3)(zod@3.25.76)
     transitivePeerDependencies:
       - bufferutil
