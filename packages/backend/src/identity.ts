@@ -60,6 +60,13 @@ function backendIdentityManifest(prefix: string): Manifest {
         actions: ['get', 'put', 'del', 'list', 'metadata'],
         skipPrefix: true,
       },
+      {
+        service: 'tinycloud.kv',
+        space: prefix,
+        path: 'audit/',
+        actions: ['get', 'put', 'list'],
+        skipPrefix: true,
+      },
     ],
   };
 }
