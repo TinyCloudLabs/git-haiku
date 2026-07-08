@@ -65,6 +65,11 @@ jobs:
           context: .
           platforms: linux/amd64
           push: true
+          # GIT_SHA is baked into the image and surfaced on GET /info as the
+          # deploy provenance signal internal.tinycloud.xyz compares against the
+          # repo default-branch HEAD. On a push to main this is the deployed HEAD.
+          build-args: |
+            GIT_SHA=${{ github.sha }}
           tags: |
             ${{ env.IMAGE_NAME }}:main-${{ github.sha }}
             ${{ env.IMAGE_NAME }}:latest
