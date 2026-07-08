@@ -3,6 +3,7 @@ import { type EgressPayload, serializeGuardedResponse } from '@githaiku/shared';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 
 import { getAttestation, verifyTeeStartup } from './attestation';
+import { inTee } from './tee';
 import {
   AuthError,
   issueSessionToken,
@@ -80,6 +81,16 @@ export async function buildServer(): Promise<FastifyInstance> {
 
   // --- Health (operational, not part of the haiku egress contract) --------
   app.get('/health', async () => ({ ok: true }));
+
+  // --- Info (public, unauthenticated): deploy provenance for stale-deploy
+  // detection by internal.tinycloud.xyz. `service`/`version` are display; the
+  // dashboard's delta compares `gitSha` against the repo default-branch HEAD.
+  app.get('/info', async () => ({
+    service: 'githaiku-backend',
+    version: config.build.version,
+    ...(config.build.gitSha ? { gitSha: config.build.gitSha } : {}),
+    env: inTee() ? 'tee' : 'local',
+  }));
 
   // --- Attestation: real dstack TDX quote in-TEE, dev stub otherwise -------
   app.get('/attestation', async (_request, reply) => {
