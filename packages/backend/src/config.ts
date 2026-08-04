@@ -102,6 +102,22 @@ export const config = {
   },
 
   /**
+   * πCreds: proves the AGENT'S CONDUCT while generating a haiku (scope/cap/leak
+   * inspector + LLM conduct evaluator), separate from the deterministic
+   * `GITHAIKU_MAX_COMMITS`/`GITHAIKU_WINDOW_DAYS` caps above (the inspector
+   * reads those directly, so a cap change never drifts out of sync with the
+   * credential).
+   */
+  picreds: {
+    /** Evaluator RedPill call timeout — short; it audits 3 lines vs a handful
+     * of commit rows, not a long transcript. */
+    evalTimeoutMs: Number(process.env['GITHAIKU_PICREDS_EVAL_TIMEOUT_MS'] ?? 8000),
+    /** Minimum commit-message substring length the leak check treats as a
+     * candidate verbatim leak. */
+    leakMinLength: Number(process.env['GITHAIKU_PICREDS_LEAK_MIN_LENGTH'] ?? 8),
+  },
+
+  /**
    * Build/deploy provenance surfaced on the public /info endpoint so
    * internal.tinycloud.xyz can detect a stale deploy. `version` is the backend
    * package version (display-only). `gitSha` is the deploy's full commit SHA and

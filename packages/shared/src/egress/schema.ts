@@ -1,3 +1,4 @@
+import { PICREDS_CONDUCT_VALUES } from '../picreds/types';
 import { POLICY_ID } from './types';
 
 /**
@@ -60,7 +61,7 @@ export const egressSchema = {
         proof: {
           type: 'object',
           additionalProperties: false,
-          required: ['policy_id', 'image_digest', 'attestation_url'],
+          required: ['policy_id', 'image_digest', 'attestation_url', 'picreds'],
           properties: {
             policy_id: {
               const: POLICY_ID,
@@ -72,6 +73,25 @@ export const egressSchema = {
             attestation_url: {
               type: ['string', 'null'],
               minLength: 1,
+            },
+            // πCreds credential summary — proves generation CONDUCT (scope/cap/
+            // leak/egress inspector + LLM evaluator verdict), not just code
+            // identity. Full inspector/evaluator breakdown lives behind the
+            // owner-authed audit endpoint, not here.
+            picreds: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['credential_hash', 'conduct'],
+              properties: {
+                credential_hash: {
+                  type: 'string',
+                  pattern: '^0x[0-9a-f]{64}$',
+                },
+                conduct: {
+                  type: 'string',
+                  enum: [...PICREDS_CONDUCT_VALUES],
+                },
+              },
             },
           },
         },

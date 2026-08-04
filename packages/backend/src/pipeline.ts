@@ -2,11 +2,15 @@ import {
   type EgressPayload,
   type EgressStage,
   guardOutboundPayload,
+  inspectGeneration,
 } from '@githaiku/shared';
 
+import { config } from './config';
 import { readCachedHaiku, writeCachedHaiku } from './generation-cache';
 import { fetchRecentCommits, fingerprintCommits } from './github';
 import { makeHaikuGenerator } from './haiku';
+import { buildCredential, type PicredsCredential } from './picreds/credential';
+import { evaluateGenerationConduct } from './picreds/evaluator';
 import { buildProof } from './proof';
 import type { SecretsProvider } from './secrets';
 import type { OwnerRecord } from './store';
@@ -37,6 +41,14 @@ export type PipelineSuccess = {
   payload: EgressPayload;
   /** Machine reason for the audit log. */
   auditReason: string;
+  /**
+   * Full πCreds breakdown (inspector checks + evaluator verdict + hash) for
+   * this generation — owner-audit only, never sent in the public response
+   * (which carries only `proof.picreds` = hash + conduct). `undefined` on a
+   * cache hit: the credential was already computed (and audited) when this
+   * haiku was first generated.
+   */
+  credential?: PicredsCredential;
 };
 
 export type PipelineFailure = {
@@ -125,16 +137,34 @@ export async function generateHaikuForOwner(
     return denial('generate', 'could not generate the haiku', 502, 'generate_error', err);
   }
 
+  // 4. πCreds — prove AGENT CONDUCT while generating this haiku: a
+  // deterministic inspector (scope/cap/leak/egress, no LLM) plus an
+  // independent LLM evaluator, folded into a credential hash. Runs on every
+  // fresh generation, before the credential is finalized; denial paths above
+  // never reach here (no commit data touched, nothing to credential).
+  const inspectorReport = inspectGeneration({
+    commits,
+    haikuLines: lines,
+    maxCommits: config.github.maxCommits,
+    windowDays: config.github.windowDays,
+    leakMinLength: config.picreds.leakMinLength,
+  });
+  const evaluatorResult = await evaluateGenerationConduct(commits, lines);
+  const credential = buildCredential(inspectorReport, evaluatorResult);
+
   // Build + guard the success payload with real (in-TEE) provenance.
   try {
     const payload = guardOutboundPayload({
       allowed: true,
       haiku: { lines },
       author: { githubLogin: owner.githubLogin },
-      proof: await buildProof(),
+      proof: await buildProof({
+        credential_hash: credential.credential_hash,
+        conduct: credential.evaluator.conduct,
+      }),
     });
     writeCachedHaiku(owner.ownerId, commitFingerprint, payload);
-    return { ok: true, payload, auditReason: 'ok' };
+    return { ok: true, payload, auditReason: 'ok', credential };
   } catch (err) {
     return denial('internal', 'could not generate the haiku', 503, 'internal_error', err);
   }

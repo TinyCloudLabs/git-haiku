@@ -410,7 +410,13 @@ export async function buildServer(): Promise<FastifyInstance> {
       const result = await generateHaikuForOwner(owner, secrets);
 
       if (result.ok) {
-        await recordAudit({ code, ownerId: owner.ownerId, decision: 'allow', reason: result.auditReason });
+        await recordAudit({
+          code,
+          ownerId: owner.ownerId,
+          decision: 'allow',
+          reason: result.auditReason,
+          picreds: result.credential,
+        });
         return reply.send(JSON.stringify(result.payload));
       }
 
@@ -449,7 +455,13 @@ export async function buildServer(): Promise<FastifyInstance> {
     const result = await generateHaikuForOwner(ctx.owner, secrets, { force });
 
     if (result.ok) {
-      await recordAudit({ code: '', ownerId: ctx.owner.ownerId, decision: 'allow', reason: 'preview_ok' });
+      await recordAudit({
+        code: '',
+        ownerId: ctx.owner.ownerId,
+        decision: 'allow',
+        reason: 'preview_ok',
+        picreds: result.credential,
+      });
       return reply.send(JSON.stringify(result.payload));
     }
 

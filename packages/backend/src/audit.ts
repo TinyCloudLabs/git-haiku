@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 
 import { config } from './config';
 import { getBackendIdentity, withSessionRefresh } from './identity';
+import type { PicredsCredential } from './picreds/credential';
 
 /**
  * Append-only audit log of haiku requests (spec requirement).
@@ -32,6 +33,14 @@ export interface AuditEntry {
   /** Machine reason / policy decision — never secret or commit data. */
   reason: string;
   policyId: string;
+  /**
+   * Full πCreds breakdown (inspector checks + evaluator verdict + hash) for
+   * this generation. Owner-audit only — the public /api/haiku response
+   * carries just the minimal `proof.picreds` summary (hash + conduct).
+   * Present only on fresh generations (absent on cache hits, denials, and
+   * invalid-code entries, which never touch commit data).
+   */
+  picreds?: PicredsCredential;
 }
 
 const KV_PREFIX = 'audit/';
@@ -145,6 +154,7 @@ export async function recordAudit(input: {
   ownerId: string | null;
   decision: AuditDecision;
   reason: string;
+  picreds?: PicredsCredential | undefined;
 }): Promise<void> {
   const entry: AuditEntry = {
     codeId: codeIdFor(input.code),
@@ -153,6 +163,7 @@ export async function recordAudit(input: {
     decision: input.decision,
     reason: input.reason,
     policyId: 'secret-code-v1',
+    ...(input.picreds ? { picreds: input.picreds } : {}),
   };
   await recordEntry(entry);
 }
