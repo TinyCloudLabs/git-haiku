@@ -69,10 +69,12 @@ describe('TEE startup verification', () => {
     expect(dstack.getKey).toHaveBeenCalledWith('githaiku/keys/backend', 'backend');
     expect(dstack.getQuote).toHaveBeenCalledOnce();
     expect(dstack.info).toHaveBeenCalledOnce();
-    await expect(buildProof()).resolves.toEqual({
+    const picreds = { credential_hash: `0x${'a'.repeat(64)}`, conduct: 'clean' as const };
+    await expect(buildProof(picreds)).resolves.toEqual({
       policy_id: 'secret-code-v1',
       image_digest: 'compose-hash',
       attestation_url: 'https://api.example/attestation',
+      picreds,
     });
 
     const attestation = await app.inject({ method: 'GET', url: '/attestation' });

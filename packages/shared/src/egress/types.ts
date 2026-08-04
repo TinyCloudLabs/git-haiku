@@ -1,3 +1,5 @@
+import type { PicredsProofSummary } from '../picreds/types';
+
 export const POLICY_ID = 'secret-code-v1' as const;
 export const EGRESS_POLICY_ID = POLICY_ID;
 
@@ -10,11 +12,18 @@ export type HaikuLines = readonly [string, string, string];
  * is deferred, so they are emitted as `null` (a clearly-marked placeholder). In
  * an attested deployment they bind to the real dstack image digest + attestation
  * URL. This is part of the guarded egress shape, not an error fallback.
+ *
+ * `picreds` proves the AGENT'S CONDUCT while generating this haiku (scope/cap/
+ * leak/egress inspector checks + an LLM conduct evaluator, hashed into
+ * `credential_hash`) — a complement to `image_digest`/`attestation_url`, which
+ * only prove WHAT CODE ran. Always present on a success payload: denial paths
+ * never touch commit data, so there's nothing to credential.
  */
 export interface EgressProof {
   readonly policy_id: typeof POLICY_ID;
   readonly image_digest: string | null;
   readonly attestation_url: string | null;
+  readonly picreds: PicredsProofSummary;
 }
 
 export interface EgressSuccessPayload {

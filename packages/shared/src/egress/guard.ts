@@ -60,6 +60,12 @@ function sanitizeToSnapshot(payload: unknown): Record<string, unknown> {
             policy_id: proof['policy_id'],
             image_digest: proof['image_digest'] ?? null,
             attestation_url: proof['attestation_url'] ?? null,
+            picreds: isRecord(proof['picreds'])
+              ? {
+                  credential_hash: proof['picreds']['credential_hash'],
+                  conduct: proof['picreds']['conduct'],
+                }
+              : undefined,
           }
         : undefined,
     };

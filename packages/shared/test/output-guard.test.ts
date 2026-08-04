@@ -8,6 +8,8 @@ import {
   serializeGuardedResponse,
 } from '../src/output-guard';
 
+const VALID_CREDENTIAL_HASH = `0x${'a'.repeat(64)}`;
+
 const validSuccess: EgressPayload = {
   allowed: true,
   haiku: {
@@ -20,6 +22,10 @@ const validSuccess: EgressPayload = {
     policy_id: EGRESS_POLICY_ID,
     image_digest: 'sha256:0123456789abcdef',
     attestation_url: 'https://attest.example/githaiku',
+    picreds: {
+      credential_hash: VALID_CREDENTIAL_HASH,
+      conduct: 'clean',
+    },
   },
 };
 
@@ -72,6 +78,61 @@ describe('guardOutbound', () => {
         },
       }),
     ).toThrow(OutboundGuardError);
+  });
+
+  it('rejects success payloads missing proof.picreds', () => {
+    const { picreds: _picreds, ...proofWithoutPicreds } = validSuccess.proof;
+    expect(() =>
+      guardOutboundPayload({
+        ...validSuccess,
+        proof: proofWithoutPicreds,
+      }),
+    ).toThrow(OutboundGuardError);
+  });
+
+  it('rejects a malformed credential_hash', () => {
+    expect(() =>
+      guardOutboundPayload({
+        ...validSuccess,
+        proof: {
+          ...validSuccess.proof,
+          picreds: { ...validSuccess.proof.picreds, credential_hash: 'not-a-hash' },
+        },
+      }),
+    ).toThrow(OutboundGuardError);
+  });
+
+  it('rejects an unknown conduct verdict', () => {
+    expect(() =>
+      guardOutboundPayload({
+        ...validSuccess,
+        proof: {
+          ...validSuccess.proof,
+          picreds: { ...validSuccess.proof.picreds, conduct: 'suspicious' },
+        },
+      }),
+    ).toThrow(OutboundGuardError);
+  });
+
+  it('accepts every known conduct verdict', () => {
+    for (const conduct of ['clean', 'flagged', 'unaudited'] as const) {
+      const payload = {
+        ...validSuccess,
+        proof: { ...validSuccess.proof, picreds: { ...validSuccess.proof.picreds, conduct } },
+      };
+      expect(guardOutboundPayload(payload)).toEqual(payload);
+    }
+  });
+
+  it('strips extra fields smuggled onto proof.picreds', () => {
+    const guarded = guardOutboundPayload({
+      ...validSuccess,
+      proof: {
+        ...validSuccess.proof,
+        picreds: { ...validSuccess.proof.picreds, evaluatorReason: 'leaked commit text' },
+      },
+    });
+    expect(guarded).toEqual(validSuccess);
   });
 
   it('strips smuggled commit data from denial payloads, keeping only the reason', () => {
@@ -193,6 +254,10 @@ describe('sanitize-before-validate (dev placeholder + snapshot identity)', () =>
         policy_id: EGRESS_POLICY_ID,
         image_digest: null,
         attestation_url: null,
+        picreds: {
+          credential_hash: `0x${'0'.repeat(64)}`,
+          conduct: 'unaudited',
+        },
       },
     };
     expect(guardOutboundPayload(devPlaceholder)).toEqual(devPlaceholder);

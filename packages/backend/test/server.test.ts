@@ -120,9 +120,47 @@ describe('POST /api/haiku', () => {
     // Dev placeholder proof.
     expect(body.proof.image_digest).toBeNull();
     expect(body.proof.attestation_url).toBeNull();
+    // πCreds: the minimal public summary (hash + conduct) is present and
+    // well-formed. No REDPILL_API_KEY in this suite -> dev-mode "unaudited".
+    expect(body.proof.picreds.credential_hash).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(body.proof.picreds.conduct).toBe('unaudited');
     // Trust contract: no commit data fields anywhere.
     expect(body).not.toHaveProperty('commits');
     expect(JSON.stringify(body)).not.toContain('feat:');
+  });
+
+  it('records the full πCreds breakdown on the audit trail (not the public response)', async () => {
+    // A token-bearing owner so commits come from the (mocked) real GitHub path,
+    // safely inside the configured window — the no-token dev fixture uses a
+    // widened window (see github.ts) that would legitimately fail the cap check.
+    const owner = createOwner({ githubLogin: 'octocat', githubToken: 'ghp_picreds_test' });
+    const commitsFixture = JSON.stringify({
+      items: [
+        {
+          repository: { full_name: 'octocat/hello' },
+          commit: { message: 'feat: add picreds test commit', author: { date: new Date().toISOString() } },
+        },
+      ],
+    });
+    const realFetch = global.fetch;
+    global.fetch = (async () => new Response(commitsFixture, { status: 200 })) as typeof fetch;
+    try {
+      const res = await app.inject({ method: 'POST', url: '/api/haiku', payload: { code: owner.secretCode } });
+      expect(JSON.parse(res.body).allowed).toBe(true);
+    } finally {
+      global.fetch = realFetch;
+    }
+
+    const entries = allAuditEntries() as unknown as Array<{
+      ownerId: string | null;
+      decision: string;
+      picreds?: { version: string; inspector: Record<string, boolean>; evaluator: { conduct: string } };
+    }>;
+    const entry = entries.find((e) => e.ownerId === owner.ownerId && e.decision === 'allow');
+    expect(entry?.picreds).toBeDefined();
+    expect(entry?.picreds?.version).toBe('v1');
+    expect(entry?.picreds?.inspector).toEqual({ scope_ok: true, cap_ok: true, leak_ok: true, egress_ok: true });
+    expect(entry?.picreds?.evaluator.conduct).toBe('unaudited');
   });
 
   it('is deterministic: same code -> same haiku', async () => {

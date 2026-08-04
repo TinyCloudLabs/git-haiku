@@ -45,6 +45,16 @@ pnpm dev
 - **Haiku generator:** RedPill (Phala's confidential LLM gateway) when a
   backend-global `REDPILL_API_KEY` is set; otherwise a deterministic template
   (same commits → same haiku, no key needed) so the zero-secret preview works.
+- **πCreds (agent conduct credential):** the output guard proves the *shape* of
+  the response; πCreds proves the *process* stayed inside the trust contract —
+  that generation only ever saw permitted commit metadata (message/repo/
+  timestamp, capped by count + window) and didn't leak anything from a commit
+  message into the haiku. Two independent layers, both re-run on every fresh
+  generation: a deterministic inspector (scope/cap/leak/egress checks, no LLM)
+  and an LLM conduct evaluator (RedPill, judges the haiku against the commit
+  metadata semantically). Both verdicts hash into `proof.picreds` alongside the
+  attestation fields; the full breakdown is available to the owner via
+  `GET /api/audit`, never in the public response.
 
 Example success response:
 
@@ -52,7 +62,12 @@ Example success response:
 {
   "allowed": true,
   "haiku": { "lines": ["old branches whisper", "the log remembers each step", "a clean tree at last"] },
-  "proof": { "policy_id": "secret-code-v1", "image_digest": null, "attestation_url": null }
+  "proof": {
+    "policy_id": "secret-code-v1",
+    "image_digest": null,
+    "attestation_url": null,
+    "picreds": { "credential_hash": "0x...", "conduct": "unaudited" }
+  }
 }
 ```
 
@@ -73,7 +88,10 @@ Example denial (wrong code):
 | Audit log | Gitignored JSONL file (`local`) | Backend's own **TinyCloud KV** space (`tc-cli`), append-only |
 | Haiku generation | RedPill if `REDPILL_API_KEY` set, else deterministic template | RedPill (`phala/deepseek-v4-flash`, TEE-attestable) — backend-global key, **not** an owner secret |
 | GitHub token | Optional; falls back to a labeled dev fixture | Required, from owner's stored token |
-| `proof` block | Dev placeholder (`image_digest`/`attestation_url` = `null`) | **Real dstack provenance** — `image_digest` = compose_hash, `attestation_url` = this app's `/attestation` |
+| πCreds evaluator | RedPill if `REDPILL_API_KEY` set, else `conduct: "unaudited"` (labeled, never blocks the response) | RedPill required — an outage still degrades to a labeled `"unaudited"` credential rather than blocking the haiku (denial paths never run πCreds; there's no commit data to protect by blocking here) |
+| πCreds inspector | Same deterministic checks in both modes (scope/cap/leak/egress; no LLM, no network) | Same |
+| Credential hash | Computed the same in both modes (sha256 over the canonical inspector+evaluator JSON) | Same, but only meaningful once folded into a real TDX `report_data` binding |
+| `proof` block | Dev placeholder (`image_digest`/`attestation_url` = `null`); `proof.picreds` always real (hash + conduct) | **Real dstack provenance** — `image_digest` = compose_hash, `attestation_url` = this app's `/attestation` |
 | `/attestation` | Clearly-marked dev stub (`dev: true`) | **Real dstack TDX quote** + event log + compose_hash + app_id |
 | Owner auth | **SIWE-style signature** (same in both modes) | **SIWE-style signature** (owner signs a server nonce; OpenKey provides the key) |
 | Requester surface | Web button | + MCP tool (deferred) |
