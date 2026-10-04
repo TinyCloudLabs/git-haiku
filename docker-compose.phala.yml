@@ -48,7 +48,13 @@ services:
       CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN}
       # dstack injects DSTACK_GATEWAY_DOMAIN at runtime; the ingress points the
       # custom domain's CNAME at the CVM's gateway automatically (no manual paste).
-      GATEWAY_DOMAIN: _.${DSTACK_GATEWAY_DOMAIN}
+      # The CNAME target must not start with `_`: Android's resolver (bionic
+      # res_hnok) rejects a CNAME target whose first label is `_`, so
+      # `_.<gateway>` is unresolvable on Android (TC-606). `gateway.<gateway>`
+      # is the target Phala Cloud advertises (gateway.cname) and upstream
+      # dstack-ingress documents; routing still uses SNI + the
+      # _dstack-app-address TXT record, so TLS stays end-to-end into the CVM.
+      GATEWAY_DOMAIN: gateway.${DSTACK_GATEWAY_DOMAIN}
       CERTBOT_EMAIL: ${CERTBOT_EMAIL}
       SET_CAA: "true"
       DNS_PROVIDER: cloudflare
